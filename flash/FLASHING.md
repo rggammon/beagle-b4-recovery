@@ -22,66 +22,66 @@ xz -dc beagle-nand-flasher.img.xz | sudo dd of=/dev/sdX bs=4M conv=fsync   # sdX
 
 ## 2. Boot the flasher and get to the U-Boot prompt
 
-Insert the SD, **hold USER1**, power on. The flasher U-Boot loads its `uEnv.txt` and
-drops to the `BeagleBoard #` prompt (it does not auto-flash).
+Insert the SD, **hold USER1**, power on. At the 3 s boot menu, pick **U-Boot shell** to
+reach the `BeagleBoard #` prompt (the flasher does not auto-flash). The flash macros are
+baked into this U-Boot's environment.
 
-## 3. Flash MLO / U-Boot / Env
+## 3. Flash everything
 
 ```
 run flashall
 ```
 
-This writes `== MLO ==`, `== U-BOOT ==`, `== ENV ==` — and *attempts* `== ROOTFS ==`.
-**The ROOTFS step will fail** with `** Reading file would overwrite reserved memory **`
-because the 111 MB rootfs can't fit in RAM in one `fatload` (this UBIFS-capable U-Boot
-reserves ~32 MB for malloc, leaving only ~95 MB loadable — check `bdinfo`). That is
-expected; do the rootfs in two steps next.
-
-## 4. Flash the rootfs in two chunks
-
-UBI is position-independent (it scans every block and rebuilds the volume from each
-PEB's headers), so we split the image at a PEB boundary and write the halves to two NAND
-offsets with a 1 MB gap (larger than any bad-block skip, so the halves can't overlap):
+No `uEnv.txt` import is needed — the macros live in the U-Boot environment, so `flashall`
+works straight from the shell. It writes, in order:
 
 ```
-nand erase 0x680000 0xf980000
-fatload mmc 0:1 0x80008000 rootfs.ubi 0x3000000 0
-nand write.trimffs 0x80008000 0x680000 0x3000000
-fatload mmc 0:1 0x80008000 rootfs.ubi 0x3f80000 0x3000000
-nand write.trimffs 0x80008000 0x3780000 0x3f80000
+== MLO ==      MLO-nand        -> NAND 0x0
+== U-BOOT ==   u-boot-nand.img -> NAND 0x80000
+== ENV ==      (erases the saved env so U-Boot uses its baked-in default)
+== ROOTFS ==   rootfs.ubi      -> NAND 0x680000 (mtd4), in two chunks (see below)
+====== NAND FLASH COMPLETE ======
 ```
 
-- Erase all of mtd4 (Filesystem).
-- Load the first 48 MB (`0x3000000`) → write to NAND `0x680000`.
-- Load the remaining ~63.5 MB (`0x3f80000`, from file offset `0x3000000`) → write to NAND
-  `0x3780000` (= `0x680000 + 0x3000000 + 0x100000` gap).
+**This rewrites MLO *and* U-Boot**, not just the rootfs. That matters: an older U-Boot in
+NAND uses a different `mtdparts` layout and looks for the rootfs at the wrong offset
+(symptom: `unsupported on-flash UBI format` / `failed to attach mtd5`). `flashall` replaces
+it, so the U-Boot and rootfs layouts always match.
 
-Each `nand write.trimffs` must end with `… bytes written: OK`.
+Each stage must end with `… OK`. If a stage errors, just re-run `run flashall` (it
+re-erases). Individual stages are also available: `run flashmlo`, `run flashub`,
+`run flashenv`, `run flashrootfs`.
 
-> If your `rootfs.ubi` is a different size, adjust: chunk1 = a PEB-aligned (128 KiB)
-> size that fits in ~90 MB; chunk2 size = filesize − chunk1; chunk2 NAND offset =
-> `0x680000 + chunk1 + 0x100000`.
+### Why the rootfs is written in two chunks
 
-## 5. Boot it
+The rootfs image (~112 MB) is larger than what fits in RAM in one `fatload`: this
+UBIFS-capable U-Boot reserves ~32 MB for malloc, leaving only ~95 MB loadable. UBI is
+position-independent (it scans every block and rebuilds the volume from each PEB's
+headers), so `flashrootfs` splits the image and writes the halves to two NAND offsets with
+a 1 MB gap (larger than any bad-block skip, so the halves can't overlap). The split point
+is computed from the actual file size (`fatsize` + `setexpr`), so it adapts automatically
+if the rootfs grows or shrinks — no hand-editing of chunk sizes.
 
-Power off, remove the SD, power on **without USER1**. The ROM loads MLO/U-Boot from
-NAND, U-Boot attaches `ubi0`, reads `/boot/nand-boot.txt`, and shows a 3 s menu:
+## 4. Boot it
+
+Power off, remove the SD, power on **without USER1**. The ROM loads MLO/U-Boot from NAND
+and shows a 3 s boot menu:
 
 ```
-SD/MMC appliance (auto; falls back to NAND)   <- default; tries SD, then NAND
+SD/MMC (auto; falls back to NAND)   <- default; tries SD, then NAND
 NAND recovery (trilobite)
 USB
 U-Boot shell
 ```
 
-With no SD present it falls through to **NAND recovery** and boots to `trilobite login:`
-(root / your key). Confirm the clockevent line shows `13000000 Hz at …@49032000` (the
-ab4 timer fix) and that `sleep`/timers work.
+With no SD present the default falls through to **NAND recovery** and boots to
+`trilobite login:` (root / your key). Confirm the clockevent line shows
+`13000000 Hz at …@49032000` (the ab4 timer fix) and that `sleep`/timers work.
 
 ## Notes
 
 - A `Loading Environment from NAND... *** Warning - bad CRC` message is benign — the NAND
-  U-Boot boots from its baked-in `CONFIG_BOOTCOMMAND`.
-- Only mtd4 (rootfs) needs the 2-chunk dance; MLO/U-Boot/Env fit in one `fatload`.
-- To change the boot default later, on the running board: `mount -o remount,rw /`, edit
-  `/boot/nand-boot.txt`, `mount -o remount,ro /`.
+  U-Boot boots from its baked-in default environment (`== ENV ==` erased the saved env).
+- `flashall` handles the rootfs 2-chunk split automatically; MLO/U-Boot/Env are single
+  writes.
+- The two `nand write.trimffs` chunks must each end with `… bytes written: OK`.

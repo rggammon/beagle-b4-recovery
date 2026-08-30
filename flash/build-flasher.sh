@@ -1,11 +1,9 @@
 #!/bin/sh
 # Assemble the self-contained NAND flasher SD image from out/ artifacts.
 # Produces beagle-nand-flasher.img.xz: FAT16 SD (MBR + partition @1MiB) carrying the
-# SD-boot MLO/u-boot, the NAND MLO-nand/u-boot-nand.img, rootfs.ubi, and uEnv.txt flash
-# macros. Uses mtools/sfdisk (no loop devices needed).
-#
-# NOTE (draft): needs an SD-boot u-boot (out/MLO, out/u-boot.img) in addition to the
-# NAND variant (out/MLO-nand, out/u-boot-nand.img). See uboot/build.sh TODO.
+# SD-boot MLO/u-boot, the NAND MLO-nand/u-boot-nand.img, and rootfs.ubi. The flash
+# macros (run flashall) are baked into the U-Boot env, so no uEnv.txt is needed.
+# Uses mtools/sfdisk (no loop devices needed).
 set -eu
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -28,7 +26,6 @@ mcopy -i "$part" "$out/u-boot.img"      ::u-boot.img      2>/dev/null || echo "W
 mcopy -i "$part" "$out/MLO-nand"        ::MLO-nand
 mcopy -i "$part" "$out/u-boot-nand.img" ::u-boot-nand.img
 mcopy -i "$part" "$out/rootfs.ubi"      ::rootfs.ubi
-mcopy -i "$part" "$here/uEnv.txt"       ::uEnv.txt
 
 dd if="$part" of="$img" bs=1M seek=1 conv=notrunc
 rm -f "$part"

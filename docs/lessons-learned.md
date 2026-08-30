@@ -119,3 +119,15 @@ Hard-won notes worth remembering for this board and this class of work.
   before `bootz` intermittently wedged the handoff — this board's USB is part of the same
   C70/DPLL defect — and the ab4 DTB already handles the DPLL for the kernel. Keep a
   `usb stop` before `bootz` for the USB menu entry's sake.
+- **Bake flash macros into the env, not `uEnv.txt`.** The NAND flasher's `run flashall`
+  originally lived in the flasher SD's `uEnv.txt`, but the 2024.07 U-Boot shell never
+  imports it (only the `bootmmc` path does, and it bails before the import when there's no
+  `zImage`). From the menu → *U-Boot shell* the macros were simply undefined
+  (`"flashall" not defined`). Putting them in `CFG_EXTRA_ENV_SETTINGS` makes them always
+  available. Corollary: `flashall` must rewrite **MLO + U-Boot too** — flashing only the
+  rootfs leaves an old U-Boot whose different `mtdparts` looks for the rootfs on the wrong
+  mtd (`unsupported on-flash UBI format`).
+- **Size the rootfs flash chunks at runtime.** The ~112 MB `rootfs.ubi` exceeds the
+  ~95 MB loadable RAM, so it's written in two `nand write.trimffs` chunks. Hardcoded chunk
+  sizes silently truncate a differently-sized image; compute them from `fatsize` +
+  `setexpr` (`c2 = filesize - 0x3000000`) so the split adapts.

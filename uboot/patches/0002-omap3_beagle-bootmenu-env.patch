@@ -1,18 +1,24 @@
 --- a/include/configs/omap3_beagle.h
 +++ b/include/configs/omap3_beagle.h
-@@ -75,6 +75,15 @@
+@@ -75,6 +75,21 @@
  
  #define CFG_EXTRA_ENV_SETTINGS \
  	MEM_LAYOUT_ENV_SETTINGS \
 +	"bootmenu_delay=3\0" \
 +	"nandmount=ubi part rootfs 2048 && ubifsmount ubi0:rootfs\0" \
 +	"bootnand=echo Booting NAND recovery (trilobite)...; setenv bootargs console=ttyS2,115200n8 ubi.mtd=4,2048 root=ubi0:rootfs rootfstype=ubifs ro rootwait; run nandmount && ubifsload 0x82000000 /boot/zImage && ubifsload 0x83000000 /boot/omap3-beagle-ab4.dtb && usb stop; bootz 0x82000000 - 0x83000000\0" \
-+	"bootmmc=echo Trying SD/MMC appliance...; if mmc rescan && load mmc 0:1 0x82000000 zImage && load mmc 0:1 0x83000000 omap3-beagle.dtb; then if load mmc 0:1 0x81000000 uEnv.txt; then env import -t 0x81000000 ${filesize}; fi; usb stop; bootz 0x82000000 - 0x83000000; fi; echo No SD appliance found\0" \
++	"bootmmc=echo Trying SD/MMC...; if mmc rescan && load mmc 0:1 0x82000000 zImage && load mmc 0:1 0x83000000 omap3-beagle.dtb; then if load mmc 0:1 0x81000000 uEnv.txt; then env import -t 0x81000000 ${filesize}; fi; usb stop; bootz 0x82000000 - 0x83000000; fi; echo No SD found\0" \
 +	"bootusb=echo Trying USB...; if usb start && load usb 0:1 0x82000000 zImage && load usb 0:1 0x83000000 omap3-beagle.dtb; then usb stop; bootz 0x82000000 - 0x83000000; fi; echo No USB boot found\0" \
-+	"bootmenu_0=SD/MMC appliance (auto; falls back to NAND)=run bootmmc ; run bootnand\0" \
++	"bootmenu_0=SD/MMC (auto; falls back to NAND)=run bootmmc ; run bootnand\0" \
 +	"bootmenu_1=NAND recovery (trilobite)=run bootnand\0" \
 +	"bootmenu_2=USB=run bootusb\0" \
 +	"bootmenu_3=U-Boot shell=\0" \
++	"lowaddr=0x80008000\0" \
++	"flashmlo=fatload mmc 0:1 ${lowaddr} MLO-nand && nand erase 0x0 0x80000 && nand write ${lowaddr} 0x0 ${filesize}\0" \
++	"flashub=fatload mmc 0:1 ${lowaddr} u-boot-nand.img && nand erase 0x80000 0x1e0000 && nand write ${lowaddr} 0x80000 ${filesize}\0" \
++	"flashenv=nand erase 0x260000 0x20000\0" \
++	"flashrootfs=fatsize mmc 0:1 rootfs.ubi && setexpr c2 ${filesize} - 0x3000000 && nand erase 0x680000 0xf980000 && fatload mmc 0:1 ${lowaddr} rootfs.ubi 0x3000000 0 && nand write.trimffs ${lowaddr} 0x680000 0x3000000 && fatload mmc 0:1 ${lowaddr} rootfs.ubi ${c2} 0x3000000 && nand write.trimffs ${lowaddr} 0x3780000 ${c2}\0" \
++	"flashall=echo == MLO ==; run flashmlo; echo == U-BOOT ==; run flashub; echo == ENV ==; run flashenv; echo == ROOTFS ==; run flashrootfs; echo; echo ====== NAND FLASH COMPLETE ======\0" \
  	"fdtfile=" CONFIG_DEFAULT_FDT_FILE "\0" \
  	"fdt_high=0xffffffff\0" \
  	"console=ttyO2,115200n8\0" \
