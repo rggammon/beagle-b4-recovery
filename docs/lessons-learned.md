@@ -58,6 +58,30 @@ Hard-won notes worth remembering for this board and this class of work.
 - **sshd needs host keys** and can't generate them on a ro root → **pre-generate**
   `/etc/ssh/ssh_host_*_key` at build time. (On an already-flashed board: one-time
   `remount,rw ; ssh-keygen -A ; rc-service sshd restart ; remount,ro`.)
+- **udhcpc can't write `/etc/resolv.conf` on a ro root** → DNS-by-name silently fails
+  (ping-by-IP still works). Point it at tmpfs: `/etc/udhcpc/udhcpc.conf` with
+  `RESOLV_CONF="/run/resolv.conf"` + symlink `/etc/resolv.conf -> /run/resolv.conf`
+  (`/run` is a tmpfs OpenRC mounts at boot). Alpine's `default.script` sources that conf.
+
+## USB on this board (MUSB host)
+- **The single MUSB port supplies very little current.** A gigabit USB NIC + hubs + a
+  flash disk on it will brown out under load: the *whole* USB tree disconnects at once
+  (you'll see the top hub `usb 1-1: USB disconnect` take everything below it, then a
+  full re-enumerate). Use a **powered hub** — that was the actual fix, not the NIC.
+- **Prefer a USB2 100 Mbit ASIX (AX88772, `asix`) over a gigabit RTL8153 (`r8152`).**
+  The RTL8153 draws more *and* its driver does firmware resets that MUSB recovers from
+  poorly; the ASIX is lower-power and far gentler on MUSB. (`rtl8153a-4.fw ... error -2`
+  is a harmless missing PHY patch — `eth0` still comes up.)
+- With a **powered** hub, device *count* stops mattering for power; only shared bus
+  bandwidth and MUSB's limited endpoints/DMA channels scale with active devices — both
+  fine for a NIC + a disk. Keep the hub tree shallow (MUSB dislikes deep TT chains).
+- Build the common USB-NIC drivers **built-in (`=y`)**, not modules: `kernel/build.sh`
+  doesn't `modules_install`, so `=m` NIC drivers wouldn't reach the rootfs.
+
+## GitHub Actions / repo hygiene
+- **Commit shell scripts with the exec bit set**, or the Linux runner fails with
+  `./x.sh: Permission denied` (exit 126). Files added from Windows are mode `100644`;
+  fix with `git update-index --chmod=+x <script>` (don't rely on the working-tree bit).
 - Benign ro/RTC noise to ignore on a recovery box: udhcpc can't write `/etc/resolv.conf`
   (no DNS-by-name; reach it by IP), "Unable to save dependency cache" (regenerated each
   boot), and **clock skew** (no RTC battery → clock starts at 1970 until chrony/NTP).
