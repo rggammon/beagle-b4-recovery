@@ -26,7 +26,7 @@ jobs:
       - name: Build kernel (zImage + omap3-beagle-ab4.dtb = the fix)
         run: ./kernel/build.sh
 
-      - name: Build U-Boot 2024.07 (one binary: SD boot + NAND)
+      - name: Build U-Boot 2024.07 (SD boot + NAND, one binary)
         run: ./uboot/build.sh
 
       - name: Build read-only Alpine rootfs (UBIFS)
