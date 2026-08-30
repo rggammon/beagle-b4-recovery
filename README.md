@@ -29,8 +29,9 @@ See [`docs/b4-c70-32khz.md`](docs/b4-c70-32khz.md) for the full root-cause story
 A single self-contained **NAND flasher SD image** (`beagle-nand-flasher.img.xz`) that
 carries:
 
-- **U-Boot 2019.04** (musb host mode, `ENV_IS_IN_NAND`, a boot menu) — both an SD copy
-  and the NAND copies (MLO + u-boot).
+- **U-Boot 2024.07** (the last mainline release that still carries `omap3_beagle`;
+  musb host mode, `ENV_IS_IN_NAND`, a boot menu) — one binary serves both the SD boot
+  and the NAND copies (SPL follows the ROM boot device).
 - **Linux 6.6.152** (pristine mainline + 4 small board patches) built with
   **`omap3-beagle-ab4.dtb`** (the timer fix).
 - An **Alpine Linux** armv7 root filesystem ("trilobite") as a **read-only UBIFS**
@@ -50,7 +51,7 @@ Boot flow after flashing (3 s menu, headless-safe):
 
   ```sh
   ./kernel/build.sh     # download 6.6.152, apply patches+config, build zImage + ab4 dtb
-  ./uboot/build.sh      # download 2019.04, apply patches+config, build MLO/u-boot (SD + NAND)
+  ./uboot/build.sh      # download 2024.07, apply 2 patches, build MLO/u-boot (one binary, SD + NAND)
   ./rootfs/build.sh     # alpine-make-rootfs + overlay -> read-only UBIFS (rootfs.ubi)
   ./flash/build-flasher.sh   # assemble beagle-nand-flasher.img.xz
   ```
@@ -62,7 +63,7 @@ Then **flash it to the board's NAND** following [`flash/FLASHING.md`](flash/FLAS
 
 ```
 kernel/     patches/ + config + build.sh   (builds zImage AND omap3-beagle-ab4.dtb = the fix)
-uboot/      patches/ + config + set-nand-bootcmd.py + build.sh
+uboot/      patches/ (2) + build.sh   (U-Boot 2024.07: defconfig delta + bootmenu env)
 rootfs/     packages.txt + overlay/ + configure.sh + build.sh   (Alpine -> ro UBIFS)
 flash/      ubinize.cfg + build-flasher.sh + FLASHING.md
 docs/       b4-c70-32khz.md, lessons-learned.md, omap-errata-sprz278f.txt,
@@ -97,20 +98,29 @@ get USB/MMC/NAND working reliably on this specific early board.
   keeping the PHY powered (like the old board-file driver) locks the DPLL once and never
   re-cycles it. This is the counterpart to the USB flakiness the C70 note warns about.
 
-### U-Boot (against U-Boot 2019.04) — `uboot/patches/`
+### U-Boot (against U-Boot 2024.07) — `uboot/patches/`
 
-- **`0001-makefile-hostcflags-fcommon.patch`** — add `-fcommon` to `HOSTCFLAGS` so the
-  host tools build under GCC 10+ (which defaults to `-fno-common`).
-- **`0002-beagle-musb-host-mode.patch`** — `board/ti/beagle/beagle.c`: set
-  `musb_hdrc.fifo_mode=5` for the OTG port, scan a second expansion EEPROM at `0x51`
-  (loop-through / uLCD boards), and set the SPL boot order **NAND → MMC1 → UART** so a
-  NAND-first board still falls back to SD/serial.
-- **`0003-nand-env-bootmenu.patch`** — `include/configs/omap3_beagle.h`: switch NAND ECC
-  to **HAM1** (uniform ROM → U-Boot → kernel, no ECC switching), put the environment in
-  NAND (`ENV_OFFSET 0x260000`), rework the boot env into the menu-driven flow, and cap
-  `SYS_MMC_MAX_BLK_COUNT` to work around an MMC multi-block quirk.
+U-Boot **2024.07** is the last mainline release that still contains `omap3_beagle`
+(removed in the v2024.10 merge window for missing the `CONFIG_DM_I2C` deadline — see
+[docs/lessons-learned.md](docs/lessons-learned.md)). By 2024.07 mainline already carries
+the HAM1 NAND ECC, `ENV_IS_IN_NAND`, and the NAND geometry, so the port is just **two
+small patches** — no `board.c` changes (musb host is config-driven under driver model).
 
-All patches are `git diff` output — apply with `patch -p1` (the build scripts do this).
+- **`0001-omap3_beagle_defconfig.patch`** — `configs/omap3_beagle_defconfig`:
+  `SYS_MMC_MAX_BLK_COUNT=1` (SPL FAT read on this board's marginal MMC — single-block
+  reads), `SYS_BOOTM_LEN=0x2000000` (the >8 MiB kernel needs a bigger reservation, else
+  the handoff resets at *Starting kernel*), musb **host** (drop `USB_MUSB_GADGET`/gadget
+  fastboot, add `USB_MUSB_HOST` + `USB_STORAGE`), `CMD_BOOTMENU`+`MENU`, our
+  `MTDPARTS_DEFAULT` (rootfs @ `0x680000`), `BOOTCOMMAND="bootmenu 3"`, and disable
+  `EFI_LOADER` (drops the "No EFI system partition" spam).
+- **`0002-omap3_beagle-bootmenu-env.patch`** — `include/configs/omap3_beagle.h`: the
+  boot menu env. `bootnand` sets the trilobite bootargs **inline** (`console=ttyS2…
+  ubi.mtd=4… ro rootwait`) rather than via a `nandargs` var (the stock header defines
+  `nandargs` too, and it wins — which silently booted with no console). `nandmount` uses
+  `ubi part rootfs 2048` (the x16-NAND UBI's VID-header offset). `usb stop` precedes each
+  `bootz` for a clean kernel handoff.
+
+Both patches are `git diff -u` output — apply with `patch -p1` (the build script does this).
 
 ## Hardware
 

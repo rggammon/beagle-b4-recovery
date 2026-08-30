@@ -1,6 +1,5 @@
-# Draft CI: download pristine U-Boot/Linux/Alpine, apply our patches/config, build the
-# NAND recovery flasher image. NOTE: the SD-boot u-boot variant isn't wired up yet
-# (uboot/build.sh only builds the NAND variant) -- expect a round or two of iteration.
+# CI: download pristine U-Boot/Linux/Alpine, apply our patches, build the NAND recovery
+# flasher image. U-Boot 2024.07 produces one binary that serves both SD boot and NAND.
 name: build
 
 on:
@@ -19,7 +18,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            gcc-arm-linux-gnueabihf bc bison flex libssl-dev \
+            gcc-arm-linux-gnueabihf bc bison flex libssl-dev swig python3-dev \
             u-boot-tools mtd-utils mtools dosfstools xz-utils wget python3 \
             qemu-user-static binfmt-support
           sudo update-binfmts --enable qemu-arm || true
@@ -27,7 +26,7 @@ jobs:
       - name: Build kernel (zImage + omap3-beagle-ab4.dtb = the fix)
         run: ./kernel/build.sh
 
-      - name: Build U-Boot (NAND variant)
+      - name: Build U-Boot 2024.07 (one binary: SD boot + NAND)
         run: ./uboot/build.sh
 
       - name: Build read-only Alpine rootfs (UBIFS)

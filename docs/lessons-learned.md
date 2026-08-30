@@ -98,6 +98,24 @@ Hard-won notes worth remembering for this board and this class of work.
 ## Build environment quirks (host)
 - Scripts edited on Windows need CRLF→LF before running on the board/host (a stray `\r`
   gives `$'\r': command not found`).
-- Cross-building this U-Boot 2019.04 with GCC 14 needs `HOSTCFLAGS += -fcommon` (bundled
-  `dtc` hits `multiple definition of yylloc`). Do **not** pass it via `HOST_EXTRACFLAGS`
-  (that clobbers the tools' include paths).
+- **Cross-building U-Boot 2024.07 needs `swig` + `python3-dev`** (pylibfdt); the SPL
+  `.lds`/fixdep step occasionally loses a `-j` race on a fresh tree — just re-run `make`
+  (`uboot/build.sh` retries once).
+
+## U-Boot 2024.07 on this board
+- **Three board-specific gotchas that all masquerade as a boot "hang":** (1)
+  `SYS_MMC_MAX_BLK_COUNT=1`, else SPL can't read `u-boot.img` off FAT (*Error reading
+  cluster* — marginal MMC, single-block reads only); (2) `ubi part rootfs 2048` — the
+  x16-NAND UBI's VID-header offset (else *bad VID header offset 2048, expected 512*);
+  (3) `SYS_BOOTM_LEN=0x2000000` — the >8 MiB kernel needs the bigger reservation or the
+  board **resets** right at *Starting kernel* (2019's `ti_armv7_common.h` set this;
+  2024.07's default 8 MiB is too small).
+- **A U-Boot env var can be silently shadowed.** Our `nandargs` (added early in
+  `CFG_EXTRA_ENV_SETTINGS`) was overridden by the stock header's `nandargs` (last
+  definition wins), so `bootargs` became `console=${console}` *unexpanded* → the kernel
+  booted with **no console** and merely *looked* hung. Set critical bootargs **inline**,
+  or use a name that can't collide. (`printenv <var>` at the prompt reveals the shadow.)
+- **Don't `usb start` before booting the kernel on this board.** Warming USB (EHCI/musb)
+  before `bootz` intermittently wedged the handoff — this board's USB is part of the same
+  C70/DPLL defect — and the ab4 DTB already handles the DPLL for the kernel. Keep a
+  `usb stop` before `bootz` for the USB menu entry's sake.

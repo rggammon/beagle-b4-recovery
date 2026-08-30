@@ -1,16 +1,18 @@
 #!/bin/sh
-# Build U-Boot 2019.04 for the BeagleBoard NAND recovery target.
+# Build U-Boot 2024.07 for the BeagleBoard NAND recovery target.
 #
-# NOTE (draft): the flasher SD carries TWO u-boot variants:
-#   - NAND u-boot   (ENV_IS_IN_NAND=y + CMD_BOOTMENU=y, boot menu) -> MLO-nand, u-boot-nand.img
-#   - SD-boot u-boot (musb host, used only to run the flasher)     -> MLO,      u-boot.img
-# This script builds ONE variant from ./config (the exported NAND config). To produce
-# both, build twice with the two .config's (TODO: capture the SD-boot .config too).
+# v2024.07 is the LAST mainline release that still carries omap3_beagle (the board was
+# removed in the v2024.10 merge window for missing the CONFIG_DM_I2C deadline). One
+# unified binary serves BOTH roles: the flasher's SD boot AND the NAND appliance, because
+# SPL follows the ROM boot device -- so there is no separate SD-boot variant.
+#
+# Patches are tiny: a defconfig delta and the bootmenu env (see uboot/patches/). No
+# board.c changes -- musb host is config-driven (CONFIG_USB_MUSB_HOST) under driver model.
 #
 # Env: CROSS_COMPILE (default arm-linux-gnueabihf-), JOBS, WORK, OUT.
 set -eu
 
-UVER=2019.04
+UVER=2024.07
 CROSS=${CROSS_COMPILE:-arm-linux-gnueabihf-}
 JOBS=${JOBS:-$(nproc)}
 here=$(cd "$(dirname "$0")" && pwd)
@@ -25,21 +27,20 @@ rm -rf "u-boot-$UVER"
 tar xf "$tarball"
 cd "u-boot-$UVER"
 
-# Patches: HOSTCFLAGS -fcommon (GCC14/dtc), musb host mode, ENV-in-NAND + boot menu.
+# 0001 = defconfig delta (MMC blk-count, BOOTM_LEN, musb host, bootmenu, mtdparts, EFI off)
+# 0002 = bootmenu env (inline trilobite bootargs; `ubi part rootfs 2048` VID-hdr offset)
 for p in "$here"/patches/*.patch; do
     echo ">> applying $(basename "$p")"
     patch -p1 < "$p"
 done
 
-cp "$here/config" .config
-make ARCH=arm CROSS_COMPILE="$CROSS" olddefconfig
+make ARCH=arm CROSS_COMPILE="$CROSS" omap3_beagle_defconfig
+# retry once: the SPL lds/fixdep step can lose a race under -j on a fresh tree
+make ARCH=arm CROSS_COMPILE="$CROSS" -j"$JOBS" \
+  || make ARCH=arm CROSS_COMPILE="$CROSS" -j"$JOBS"
 
-# GCC 14 needs -fcommon for the bundled dtc host tool (also patched into the Makefile).
-make ARCH=arm CROSS_COMPILE="$CROSS" -j"$JOBS"
-
-# Bake the NAND boot command (ubi attach -> load /boot/nand-boot.txt -> bootmenu).
-[ -f "$here/set-nand-bootcmd.py" ] && python3 "$here/set-nand-bootcmd.py" . || true
-
-cp MLO      "$out/MLO-nand"
-cp u-boot.img "$out/u-boot-nand.img"
-echo ">> u-boot -> $out/{MLO-nand,u-boot-nand.img}"
+# Same binary for both roles; the flasher writes MLO-nand/u-boot-nand.img to NAND and
+# boots MLO/u-boot.img from SD -- identical bytes.
+cp MLO "$out/MLO";         cp u-boot.img "$out/u-boot.img"
+cp MLO "$out/MLO-nand";    cp u-boot.img "$out/u-boot-nand.img"
+echo ">> u-boot $UVER -> $out/{MLO,u-boot.img,MLO-nand,u-boot-nand.img} (identical)"
