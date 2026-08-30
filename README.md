@@ -26,16 +26,23 @@ See [`docs/b4-c70-32khz.md`](docs/b4-c70-32khz.md) for the full root-cause story
 
 ## What it builds
 
-A single self-contained **NAND flasher SD image** (`beagle-nand-flasher.img.xz`) that
-carries:
+**Two** SD-card images, so you can pick how the board runs:
+
+- **`beagle-sdcard.img.xz`** — a **run-from-SD appliance** (FAT boot + **ext4** root).
+  Write it to a card, boot it, done — NAND is never touched.
+- **`beagle-nand-flasher.img.xz`** — boot it to **flash the appliance into NAND**
+  (`run flashall`), after which the board runs headless from NAND with **no SD card**.
+
+Both share the same pieces:
 
 - **U-Boot 2024.07** (the last mainline release that still carries `omap3_beagle`;
   musb host mode, `ENV_IS_IN_NAND`, a boot menu) — one binary serves both the SD boot
   and the NAND copies (SPL follows the ROM boot device).
 - **Linux 6.6.152** (pristine mainline + 4 small board patches) built with
   **`omap3-beagle-ab4.dtb`** (the timer fix).
-- An **Alpine Linux** armv7 root filesystem ("trilobite") as a **read-only UBIFS**
-  image, with a small entropy seed so boot is fast on this hardware.
+- An **Alpine Linux** armv7 root filesystem ("trilobite"), read-only, packaged as
+  **UBIFS** for NAND and **ext4** for SD (same tree), with a small entropy seed so boot
+  is fast on this hardware.
 
 Boot flow after flashing (3 s menu, headless-safe):
 `SD/MMC appliance (auto) → falls back to NAND recovery` · `NAND recovery (trilobite)` ·
@@ -52,12 +59,14 @@ Boot flow after flashing (3 s menu, headless-safe):
   ```sh
   ./kernel/build.sh     # download 6.6.152, apply patches+config, build zImage + ab4 dtb
   ./uboot/build.sh      # download 2024.07, apply 2 patches, build MLO/u-boot (one binary, SD + NAND)
-  ./rootfs/build.sh     # alpine-make-rootfs + overlay -> read-only UBIFS (rootfs.ubi)
-  ./flash/build-flasher.sh   # assemble beagle-nand-flasher.img.xz
+  ./rootfs/build.sh     # alpine-make-rootfs + overlay -> rootfs.ubi (NAND) AND rootfs.ext4 (SD)
+  ./flash/build-flasher.sh   # assemble beagle-nand-flasher.img.xz  (flash to NAND)
+  ./flash/build-sdcard.sh    # assemble beagle-sdcard.img.xz        (run from SD)
   ```
 
-Then **flash it to the board's NAND** following [`flash/FLASHING.md`](flash/FLASHING.md)
-(a two-step write, because this board's U-Boot can't hold the whole rootfs in RAM at once).
+Then either **run from SD** (write `beagle-sdcard.img.xz` to a card and boot), or
+**flash to NAND** following [`flash/FLASHING.md`](flash/FLASHING.md) (a two-step write,
+because this board's U-Boot can't hold the whole rootfs in RAM at once).
 
 ## Repo layout
 
@@ -65,7 +74,7 @@ Then **flash it to the board's NAND** following [`flash/FLASHING.md`](flash/FLAS
 kernel/     patches/ + config + build.sh   (builds zImage AND omap3-beagle-ab4.dtb = the fix)
 uboot/      patches/ (2) + build.sh   (U-Boot 2024.07: defconfig delta + bootmenu env)
 rootfs/     packages.txt + overlay/ + configure.sh + build.sh   (Alpine -> ro UBIFS)
-flash/      ubinize.cfg + build-flasher.sh + FLASHING.md
+flash/      ubinize.cfg + build-flasher.sh + build-sdcard.sh + uEnv*.txt + FLASHING.md
 docs/       b4-c70-32khz.md, lessons-learned.md, omap-errata-sprz278f.txt,
             elinux-beagleboard-community.html, beagle-c70-capacitor.jpg
 .github/workflows/build.yml

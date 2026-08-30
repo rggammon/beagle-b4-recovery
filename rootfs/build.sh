@@ -51,7 +51,15 @@ sudo mkdir -p rootfs/boot
 sudo cp "$out/zImage" rootfs/boot/zImage
 sudo cp "$out/omap3-beagle-ab4.dtb" rootfs/boot/omap3-beagle-ab4.dtb
 
-# 4. read-only UBIFS -> UBI image.
+# 4. read-only UBIFS -> UBI image (for the NAND appliance).
 sudo mkfs.ubifs -m 2048 -e 126976 -c 1900 -x lzo -o rootfs.ubifs -r rootfs
 ubinize -o "$out/rootfs.ubi" -p 128KiB -m 2048 -s 2048 "$here/../flash/ubinize.cfg"
 echo ">> rootfs.ubi ($(stat -c%s "$out/rootfs.ubi") bytes) -> $out/"
+
+# 5. same tree as an ext4 block image (for the SD-card appliance). ext4 is built into
+#    the kernel; squashfs is not. Mounted read-only, so it behaves like the NAND root.
+sudo sed -i 's|^ubi0:rootfs / ubifs .*|/dev/mmcblk0p2 / ext4 ro,relatime 0 1|' rootfs/etc/fstab
+rm -f "$out/rootfs.ext4"
+truncate -s 400M "$out/rootfs.ext4"
+sudo mkfs.ext4 -F -q -m 0 -L rootfs -d rootfs "$out/rootfs.ext4"
+echo ">> rootfs.ext4 ($(stat -c%s "$out/rootfs.ext4") bytes) -> $out/"
