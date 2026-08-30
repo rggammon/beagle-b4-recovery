@@ -21,3 +21,7 @@ sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication no/'  /etc/ssh/ssh
 
 # root: no password (key auth only); unlock the account so key login is allowed.
 passwd -u root 2>/dev/null || true
+
+# Read-only root: DHCP DNS lands on tmpfs (see /etc/udhcpc/udhcpc.conf RESOLV_CONF).
+# /run is a tmpfs OpenRC mounts at boot, so this resolves once udhcpc writes it.
+ln -sf /run/resolv.conf /etc/resolv.conf
