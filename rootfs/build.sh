@@ -20,8 +20,10 @@ cd "$work"
   "https://raw.githubusercontent.com/alpinelinux/alpine-make-rootfs/$AMR_VER/alpine-make-rootfs"
 chmod +x alpine-make-rootfs
 rm -rf rootfs
-sudo ALPINE_BRANCH="$ALPINE_BRANCH" ./alpine-make-rootfs \
-    --branch "$ALPINE_BRANCH" --arch armv7 \
+# v0.7.0 has no --arch flag: set the target arch via apk (APK_OPTS reaches every apk
+# call incl. --initdb, which writes /etc/apk/arch). The armv7 chroot runs under qemu binfmt.
+sudo APK_OPTS="--no-progress --arch armv7" ./alpine-make-rootfs \
+    --branch "$ALPINE_BRANCH" \
     --packages "$(cat "$here/packages.txt")" \
     --script-chroot \
     rootfs "$here/post-install.sh"
