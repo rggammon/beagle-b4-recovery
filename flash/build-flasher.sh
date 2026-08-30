@@ -11,7 +11,9 @@ set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 out=${OUT:-$here/../out}
 img=${IMG:-$out/beagle-nand-flasher.img}
-SIZE_MB=${SIZE_MB:-256}
+# 120 MiB fits a "128MB" SD card. Payload is ~112 MiB (rootfs.ubi) + ~1.4 MiB
+# (both U-Boots), so this is near the floor -- shrink the UBI rootfs before going lower.
+SIZE_MB=${SIZE_MB:-120}
 
 truncate -s "${SIZE_MB}M" "$img"
 printf 'label: dos\nunit: sectors\n\nstart=2048, type=c, bootable\n' | sfdisk "$img"
