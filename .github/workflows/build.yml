@@ -4,11 +4,10 @@
 name: build
 
 on:
-  push:
-    branches: [main]
-    tags: ['v*']
-  pull_request:
+  # Manual builds only. Pushing a version tag (vX.Y.Z) also builds and publishes a release.
   workflow_dispatch:
+  push:
+    tags: ['v*']
 
 jobs:
   build:

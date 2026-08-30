@@ -44,9 +44,9 @@ Boot flow after flashing (3 s menu, headless-safe):
 
 - **Download** a prebuilt `beagle-nand-flasher.img.xz` from the
   [Releases](../../releases) page, or
-- **Build it yourself** — push to trigger the GitHub Actions workflow
-  (`.github/workflows/build.yml`), or run the stages locally on a Linux host with an
-  ARM cross-toolchain:
+- **Build it yourself** — trigger the GitHub Actions workflow manually
+  (Actions → **build** → *Run workflow*, or `gh workflow run build.yml`), or run the
+  stages locally on a Linux host with an ARM cross-toolchain:
 
   ```sh
   ./kernel/build.sh     # download 6.6.152, apply patches+config, build zImage + ab4 dtb
@@ -70,6 +70,48 @@ docs/       b4-c70-32khz.md, lessons-learned.md, omap-errata-sprz278f.txt,
 .github/workflows/build.yml
 ```
 
+## Patches
+
+The timer fix itself is **not** a patch — it's building the mainline
+`omap3-beagle-ab4.dtb`. The patches below are small, unrelated board fixes needed to
+get USB/MMC/NAND working reliably on this specific early board.
+
+### Kernel (against Linux 6.6.152) — `kernel/patches/`
+
+- **`0001-omap3-beagle-board-usb-mmc-nand.patch`** — `omap3-beagle.dts`: disable the
+  unused EHCI/`hsusb2` host PHY and `usbhshost` (this board only uses the MUSB OTG
+  port) and switch the OTG port to **host mode** (`mode = <1>`); give `mmc1` an explicit
+  4-bit pinmux, `non-removable`, and a 25 MHz cap for stable SD timings; give the TWL
+  PMIC an explicit `fck` clock.
+- **`0002-omap_hsmmc-pbias-settle-dmae-gate.patch`** — `omap_hsmmc.c`: add a 20 ms
+  PBIAS/rail settle after power-on (marginal board), and only set the DMA-enable command
+  bit (`DMAE`) when the command actually has a **data** phase — avoids arming DMA on
+  non-data commands.
+- **`0003-nand_ids-mt29f2g16abd-onfi-x16.patch`** — `nand_ids.c`: add an explicit
+  full-ID entry for this board's Micron **MT29F2G16ABD** (256 MiB, 1.8 V, x16) so it's
+  detected with the correct 2K page / 128K erase / 16-bit geometry.
+- **`0004-phy-twl4030-usb-probe-defer.patch`** — `phy-twl4030-usb.c`: return the real
+  regulator error (allowing probe **deferral** instead of a hard fail), and **never
+  autosuspend the USB PHY** — hold the probe-time runtime-PM reference. On this marginal
+  board the DPLL re-lock after an autosuspend power-down intermittently times out;
+  keeping the PHY powered (like the old board-file driver) locks the DPLL once and never
+  re-cycles it. This is the counterpart to the USB flakiness the C70 note warns about.
+
+### U-Boot (against U-Boot 2019.04) — `uboot/patches/`
+
+- **`0001-makefile-hostcflags-fcommon.patch`** — add `-fcommon` to `HOSTCFLAGS` so the
+  host tools build under GCC 10+ (which defaults to `-fno-common`).
+- **`0002-beagle-musb-host-mode.patch`** — `board/ti/beagle/beagle.c`: set
+  `musb_hdrc.fifo_mode=5` for the OTG port, scan a second expansion EEPROM at `0x51`
+  (loop-through / uLCD boards), and set the SPL boot order **NAND → MMC1 → UART** so a
+  NAND-first board still falls back to SD/serial.
+- **`0003-nand-env-bootmenu.patch`** — `include/configs/omap3_beagle.h`: switch NAND ECC
+  to **HAM1** (uniform ROM → U-Boot → kernel, no ECC switching), put the environment in
+  NAND (`ENV_OFFSET 0x260000`), rework the boot env into the menu-driven flow, and cap
+  `SYS_MMC_MAX_BLK_COUNT` to work around an MMC multi-block quirk.
+
+All patches are `git diff` output — apply with `patch -p1` (the build scripts do this).
+
 ## Hardware
 
 - BeagleBoard OMAP3530-GP ES2.1, **Rev Ax/Bx (B4)**, 128 MB RAM, 256 MB NAND
@@ -83,6 +125,9 @@ docs/       b4-c70-32khz.md, lessons-learned.md, omap-errata-sprz278f.txt,
   <https://elinux.org/BeagleBoard_Community#Revision_B> — local copy in `docs/`.
 - 2008 mailing-list thread, "GPT1 timer issue aka UART3 hang on Beagle Board":
   <https://forum.beagleboard.org/t/gpt1-timer-issue-aka-uart3-hang-issue-on-beagle-board/2962>
+- Greg Kroah-Hartman, stable backport of *"ARM: dts: Fix timer regression for
+  beagleboard revision c"* (the mainline timer-clocking fix, on LKML):
+  <https://lkml.org/lkml/2022/2/14/855> (5.16) · <https://lkml.org/lkml/2022/2/14/538> (5.10).
 - Mainline `omap3-beagle-ab4.dts` (the fix), Linux `arch/arm/boot/dts/ti/omap/`.
 
 ## License
