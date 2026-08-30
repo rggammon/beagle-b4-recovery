@@ -1,0 +1,4 @@
+ubi0:rootfs / ubifs ro,relatime 0 0
+tmpfs /tmp tmpfs nosuid,nodev,mode=1777 0 0
+tmpfs /var/log tmpfs nosuid,nodev 0 0
+/dev/cdrom /media/cdrom iso9660 noauto,ro 0 0

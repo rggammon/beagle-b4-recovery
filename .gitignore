@@ -1,0 +1,7 @@
+# Build outputs / downloaded sources
+/build/
+/out/
+
+# Logs and scratch
+*.log
+*.bak

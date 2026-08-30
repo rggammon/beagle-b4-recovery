@@ -1,0 +1,22 @@
+diff --git a/drivers/mmc/host/omap_hsmmc.c b/drivers/mmc/host/omap_hsmmc.c
+index e120aeb86..7d9202669 100644
+--- a/drivers/mmc/host/omap_hsmmc.c
++++ b/drivers/mmc/host/omap_hsmmc.c
+@@ -344,6 +344,8 @@ static int omap_hsmmc_set_power(struct omap_hsmmc_host *host, int power_on)
+ 		ret = omap_hsmmc_set_pbias(host, true);
+ 		if (ret)
+ 			goto err_set_voltage;
++
++		msleep(20); /* PBIAS/rail settle for marginal OMAP3 board */
+ 	} else {
+ 		ret = omap_hsmmc_disable_supply(mmc);
+ 		if (ret)
+@@ -798,7 +800,7 @@ omap_hsmmc_start_command(struct omap_hsmmc_host *host, struct mmc_command *cmd,
+ 			cmdreg &= ~(DDIR);
+ 	}
+ 
+-	if (host->use_dma)
++	if (host->use_dma && data)
+ 		cmdreg |= DMAE;
+ 
+ 	host->req_in_progress = 1;

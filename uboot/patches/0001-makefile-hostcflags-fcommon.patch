@@ -1,0 +1,12 @@
+diff --git a/Makefile b/Makefile
+index aedc2ea..054be7a 100644
+--- a/Makefile
++++ b/Makefile
+@@ -266,6 +266,7 @@ HOSTCXXFLAGS = -O2
+ CSTD_FLAG := -std=gnu11
+ ifeq ($(HOSTOS),linux)
+ HOSTCFLAGS += $(CSTD_FLAG)
++HOSTCFLAGS += -fcommon
+ endif
+ 
+ ifeq ($(HOSTOS),cygwin)

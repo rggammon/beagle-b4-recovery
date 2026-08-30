@@ -1,0 +1,11 @@
+# Normalize line endings; the build runs on Linux (CI) so shell scripts must be LF.
+* text=auto eol=lf
+*.sh   text eol=lf
+*.py   text eol=lf
+*.yml  text eol=lf
+*.md   text eol=lf
+
+# Binaries
+*.jpg  binary
+*.png  binary
+*.html binary

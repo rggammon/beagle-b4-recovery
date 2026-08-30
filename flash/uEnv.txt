@@ -1,0 +1,21 @@
+# U-Boot flash macros for the NAND recovery image (loaded from the flasher SD FAT).
+# At the U-Boot prompt: `run flashall`  (or run individual steps).
+#
+# NAND layout (mtd): MLO 0x0/0x80000, U-Boot 0x80000/0x1e0000, Env 0x260000/0x20000,
+# Kernel 0x280000/0x400000 (unused; kernel lives in the rootfs /boot), Filesystem
+# 0x680000/0xf980000.
+#
+# lowaddr = load buffer. The rootfs is written in TWO chunks because this UBIFS-capable
+# U-Boot leaves only ~95 MB loadable (see docs/lessons-learned.md). Chunk sizes below
+# are for a ~111 MB rootfs.ubi (0x6f80000): chunk1=0x3000000, chunk2=filesize-chunk1,
+# chunk2 NAND offset = 0x680000+0x3000000+0x100000 gap. Adjust if the image size changes.
+
+lowaddr=0x80008000
+
+flashmlo=fatload mmc 0:1 ${lowaddr} MLO-nand && nand erase 0x0 0x80000 && nand write ${lowaddr} 0x0 ${filesize}
+flashub=fatload mmc 0:1 ${lowaddr} u-boot-nand.img && nand erase 0x80000 0x1e0000 && nand write ${lowaddr} 0x80000 ${filesize}
+flashenv=nand erase 0x260000 0x20000
+flashrootfs=nand erase 0x680000 0xf980000 && fatload mmc 0:1 ${lowaddr} rootfs.ubi 0x3000000 0 && nand write.trimffs ${lowaddr} 0x680000 0x3000000 && fatload mmc 0:1 ${lowaddr} rootfs.ubi 0x3f80000 0x3000000 && nand write.trimffs ${lowaddr} 0x3780000 0x3f80000
+flashall=echo == MLO ==; run flashmlo; echo == U-BOOT ==; run flashub; echo == ENV ==; run flashenv; echo == ROOTFS (2-chunk) ==; run flashrootfs; echo; echo ====== NAND FLASH COMPLETE ======
+
+uenvcmd=echo; echo ============ NAND FLASHER ============; echo 'run flashall = flash MLO+U-Boot+Env+rootfs (rootfs is 2-chunk, automatic)'; echo 'USER1 at power-on boots SD (recovery net)'; echo =====================================; echo

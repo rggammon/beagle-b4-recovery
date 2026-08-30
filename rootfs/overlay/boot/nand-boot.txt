@@ -1,0 +1,12 @@
+mtdparts=mtdparts=omap2-nand.0:512k(spl),1920k(u-boot),128k(u-boot-env),4m(kernel),-(rootfs)
+nandargs=console=ttyS2,115200n8 ubi.mtd=4,2048 root=ubi0:rootfs rootfstype=ubifs ro rootwait
+bootnand=echo Booting NAND recovery (trilobite)...; setenv bootargs ${nandargs}; ubifsload 0x82000000 /boot/zImage; ubifsload 0x83000000 /boot/omap3-beagle-ab4.dtb; bootz 0x82000000 - 0x83000000
+bootmmc=echo Trying SD/MMC appliance...; if mmc rescan && load mmc 0:1 0x82000000 zImage && load mmc 0:1 0x83000000 omap3-beagle.dtb; then if load mmc 0:1 0x81000000 uEnv.txt; then env import -t 0x81000000 ${filesize}; fi; bootz 0x82000000 - 0x83000000; fi; echo No SD appliance found
+bootusb=echo Trying USB...; if usb start && load usb 0:1 0x82000000 zImage && load usb 0:1 0x83000000 omap3-beagle.dtb; then bootz 0x82000000 - 0x83000000; fi; echo No USB boot found
+bootmenu_0=SD/MMC appliance (auto; falls back to NAND)=run bootmmc ; run bootnand
+bootmenu_1=NAND recovery (trilobite)=run bootnand
+bootmenu_2=USB=run bootusb
+bootmenu_3=U-Boot shell=
+bootmenu_delay=3
+fdt_high=0xffffffff
+
