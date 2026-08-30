@@ -48,10 +48,25 @@ Boot flow after flashing (3 s menu, headless-safe):
 `SD/MMC appliance (auto) → falls back to NAND recovery` · `NAND recovery (trilobite)` ·
 `USB` · `U-Boot shell`.
 
+## Which image should I use?
+
+| | `beagle-sdcard.img.xz` (run from SD) | `beagle-nand-flasher.img.xz` (flash to NAND) |
+|---|---|---|
+| What you do | write to a card, boot | write to a card, boot, `run flashall`, remove card |
+| Runs from | the **SD card** (ext4 root) | on-board **NAND** (UBIFS root) |
+| SD card at runtime | **required**, always in the slot | **none** — runs headless, SD-free |
+| Touches NAND | never | yes (overwrites MLO / U-Boot / rootfs in NAND) |
+| Best for | trying it out, keeping NAND untouched, easy re-imaging | a permanent SD-free recovery appliance |
+| Undo | pop the card out | keep a flasher card — hold **USER1** at power-on to boot SD |
+
+Both boot the **same** kernel, U-Boot, and `trilobite` rootfs — only the storage medium
+and root filesystem differ (ext4 on the SD block device vs UBIFS on raw NAND flash).
+Either way, holding **USER1** at power-on forces an SD boot (the recovery net).
+
 ## Quick start
 
-- **Download** a prebuilt `beagle-nand-flasher.img.xz` from the
-  [Releases](../../releases) page, or
+- **Download** the prebuilt images (`beagle-sdcard.img.xz` or
+  `beagle-nand-flasher.img.xz`) from the [Releases](../../releases) page, or
 - **Build it yourself** — trigger the GitHub Actions workflow manually
   (Actions → **build** → *Run workflow*, or `gh workflow run build.yml`), or run the
   stages locally on a Linux host with an ARM cross-toolchain:
