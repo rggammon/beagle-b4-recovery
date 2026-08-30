@@ -41,12 +41,20 @@ jobs:
       - name: Checksums
         run: cd out && sha256sum beagle-nand-flasher.img.xz beagle-sdcard.img.xz > SHA256SUMS
 
-      - name: Upload build artifact
+      - name: Upload NAND flasher image
         uses: actions/upload-artifact@v5
         with:
-          name: beagle-images
+          name: beagle-nand-flasher
           path: |
             out/beagle-nand-flasher.img.xz
+            out/SHA256SUMS
+          if-no-files-found: error
+
+      - name: Upload SD-card appliance image
+        uses: actions/upload-artifact@v5
+        with:
+          name: beagle-sdcard
+          path: |
             out/beagle-sdcard.img.xz
             out/SHA256SUMS
           if-no-files-found: error
