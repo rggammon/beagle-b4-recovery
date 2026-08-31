@@ -131,3 +131,9 @@ Hard-won notes worth remembering for this board and this class of work.
   ~95 MB loadable RAM, so it's written in two `nand write.trimffs` chunks. Hardcoded chunk
   sizes silently truncate a differently-sized image; compute them from `fatsize` +
   `setexpr` (`c2 = filesize - 0x3000000`) so the split adapts.
+- **The flasher SD must not try to boot a kernel.** One U-Boot binary serves the flasher
+  SD, the SD appliance, and NAND — but they want different defaults. `bootcmd=run autoboot`
+  probes for `rootfs.ubi` on mmc 0:1 (only the flasher carries it) and, if found, prints a
+  `run flashall` banner and drops to the shell instead of running the boot menu. Without
+  this, a flasher SD falls through `bootmmc` (no `zImage`) → `bootnand` → cryptic UBI
+  errors from unflashed NAND. Same binary, per-card behavior — no second build.

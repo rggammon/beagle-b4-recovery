@@ -1,10 +1,12 @@
 --- a/include/configs/omap3_beagle.h
 +++ b/include/configs/omap3_beagle.h
-@@ -75,6 +75,21 @@
+@@ -75,6 +75,23 @@
  
  #define CFG_EXTRA_ENV_SETTINGS \
  	MEM_LAYOUT_ENV_SETTINGS \
 +	"bootmenu_delay=3\0" \
++	"autoboot=if mmc dev 0 && fatsize mmc 0:1 rootfs.ubi; then run flashhelp; else bootmenu 3; fi\0" \
++	"flashhelp=echo; echo == NAND FLASHER SD ==; echo This SD writes NAND and does not boot a kernel.; echo At the prompt, run:  run flashall; echo\0" \
 +	"nandmount=ubi part rootfs 2048 && ubifsmount ubi0:rootfs\0" \
 +	"bootnand=echo Booting NAND recovery (trilobite)...; setenv bootargs console=ttyS2,115200n8 ubi.mtd=4,2048 root=ubi0:rootfs rootfstype=ubifs ro rootwait; run nandmount && ubifsload 0x82000000 /boot/zImage && ubifsload 0x83000000 /boot/omap3-beagle-ab4.dtb && usb stop; bootz 0x82000000 - 0x83000000\0" \
 +	"bootmmc=echo Trying SD/MMC...; if mmc rescan && load mmc 0:1 0x82000000 zImage && load mmc 0:1 0x83000000 omap3-beagle.dtb; then if load mmc 0:1 0x81000000 uEnv.txt; then env import -t 0x81000000 ${filesize}; fi; usb stop; bootz 0x82000000 - 0x83000000; fi; echo No SD found\0" \

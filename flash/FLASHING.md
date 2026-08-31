@@ -20,11 +20,19 @@ xz -dc beagle-nand-flasher.img.xz | sudo dd of=/dev/sdX bs=4M conv=fsync   # sdX
 
 (On Windows, use balenaEtcher or Rufus with the decompressed `.img`.)
 
-## 2. Boot the flasher and get to the U-Boot prompt
+## 2. Boot the flasher
 
-Insert the SD, **hold USER1**, power on. At the 3 s boot menu, pick **U-Boot shell** to
-reach the `BeagleBoard #` prompt (the flasher does not auto-flash). The flash macros are
-baked into this U-Boot's environment.
+Insert the SD, **hold USER1**, power on. The flasher's U-Boot recognises itself (it sees
+`rootfs.ubi` on the card) and drops straight to the `BeagleBoard #` prompt with a banner:
+
+```
+== NAND FLASHER SD ==
+This SD writes NAND and does not boot a kernel.
+At the prompt, run:  run flashall
+```
+
+It deliberately does **not** try to boot a kernel, so you won't get cryptic UBI errors
+(`unsupported on-flash UBI format`, `Bad magic!`) from an unflashed NAND.
 
 ## 3. Flash everything
 
