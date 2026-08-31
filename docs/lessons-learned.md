@@ -137,3 +137,20 @@ Hard-won notes worth remembering for this board and this class of work.
   `run flashall` banner and drops to the shell instead of running the boot menu. Without
   this, a flasher SD falls through `bootmmc` (no `zImage`) → `bootnand` → cryptic UBI
   errors from unflashed NAND. Same binary, per-card behavior — no second build.
+- **`nand_page_size()` returns 0 in the SPL → NAND boot fails (mainline bug).** After the
+  ROM loads MLO, the SPL loads u-boot from NAND via the unified `spl_load()`, which aligns
+  the read to `bl_len = nand_page_size()`. But `nand_page_size()` returns `mtd->writesize`,
+  which is only set by `nand_scan` — and the SRAM-constrained OMAP3 SPL uses the minimal
+  `nand_spl_simple` reader (no `nand_scan`), so it's **0**. `ALIGN(imgsize, 0) == 0`, so the
+  SPL reads a zero-length body and reports `SPL: failed to boot from all boot devices` —
+  even though the header read fine (magic `27051956`, `iminfo` valid via the full driver).
+  Fix in `nand_spl_simple.c`: `nand_page_size()` returns `CONFIG_SYS_NAND_PAGE_SIZE` (the
+  static size the SPL already uses). Only bites `nand_spl_simple` boards **without**
+  `CONFIG_SPL_NAND_RAW_ONLY` (which bypasses the `bl_len` path). 2019.04 predates the
+  unified `spl_load()` (read `spl_image->size` directly), so it never hit this. MMC/FAT
+  boot is immune — the FAT loader passes the real file size instead of relying on `bl_len`.
+- **A stale rootfs can hide overlay fixes.** The read-only-root `resolv.conf` fix
+  (`udhcpc.conf` `RESOLV_CONF=/run/resolv.conf` + `/etc/resolv.conf → /run/resolv.conf`)
+  lives in the overlay, applied *after* the apk install. A `rootfs.ubi` built before the
+  overlay landed still errors (`can't create /etc/resolv.conf.NNN: Read-only file system`);
+  `strings rootfs.ubifs | grep RESOLV_CONF` confirms whether the fix is baked in.

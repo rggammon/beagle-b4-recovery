@@ -1,0 +1,12 @@
+--- a/drivers/mtd/nand/raw/nand_spl_simple.c
++++ b/drivers/mtd/nand/raw/nand_spl_simple.c
+@@ -229,7 +229,8 @@
+ 
+ unsigned int nand_page_size(void)
+ {
+-	return nand_to_mtd(&nand_chip)->writesize;
++	/* SPL has no nand_scan, so mtd->writesize is 0; use the static page size */
++	return CONFIG_SYS_NAND_PAGE_SIZE;
+ }
+ 
+ /* Unselect after operation */
