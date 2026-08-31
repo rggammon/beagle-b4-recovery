@@ -149,8 +149,9 @@ small patches** — no `board.c` changes (musb host is config-driven under drive
   returns `mtd->writesize` — a field only populated by `nand_scan()`. The OMAP3 SPL runs
   from 64 KB SRAM and can't fit `nand_scan()` (the very reason it uses the minimal
   `nand_spl_simple` reader), so `writesize` stays 0, `ALIGN(size, 0)` collapses to 0, and
-  the SPL loads a zero-length U-Boot (*SPL: failed to boot from all boot devices*). Return
-  the statically-known `CONFIG_SYS_NAND_PAGE_SIZE` — the page size the reader already uses
+  the SPL loads a zero-length U-Boot (*SPL: failed to boot from all boot devices*). Fall
+  back to the statically-known `CONFIG_SYS_NAND_PAGE_SIZE` when `writesize` is 0
+  (`writesize ?: CONFIG_SYS_NAND_PAGE_SIZE`) — the page size the reader already uses
   everywhere else. Without it only SD boot works; NAND self-boot is dead. (Latent mainline
   bug: modern SoCs that *can* fit `nand_scan` in SPL populate `writesize` and never hit it.)
 

@@ -5,8 +5,8 @@
  unsigned int nand_page_size(void)
  {
 -	return nand_to_mtd(&nand_chip)->writesize;
-+	/* SPL has no nand_scan, so mtd->writesize is 0; use the static page size */
-+	return CONFIG_SYS_NAND_PAGE_SIZE;
++	/* SPL skips nand_scan, so mtd->writesize is 0; fall back to the static size */
++	return nand_to_mtd(&nand_chip)->writesize ?: CONFIG_SYS_NAND_PAGE_SIZE;
  }
  
  /* Unselect after operation */
