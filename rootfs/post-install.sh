@@ -19,8 +19,11 @@ ssh-keygen -A
 sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config
 sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication no/'  /etc/ssh/sshd_config
 
-# root: no password (key auth only); unlock the account so key login is allowed.
+# root: passwordless on the (trusted, physical) serial console; ssh stays key-only
+# (PasswordAuthentication no above). `passwd -u` alone leaves a locked/`!` field on a
+# never-set account, which `login` still rejects -- so blank the shadow field outright.
 passwd -u root 2>/dev/null || true
+sed -i 's|^root:[^:]*:|root::|' /etc/shadow
 
 # Read-only root: DHCP DNS lands on tmpfs (see /etc/udhcpc/udhcpc.conf RESOLV_CONF).
 # /run is a tmpfs OpenRC mounts at boot, so this resolves once udhcpc writes it.
