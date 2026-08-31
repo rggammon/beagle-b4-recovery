@@ -87,7 +87,7 @@ because this board's U-Boot can't hold the whole rootfs in RAM at once).
 
 ```
 kernel/     patches/ + config + build.sh   (builds zImage AND omap3-beagle-ab4.dtb = the fix)
-uboot/      patches/ (2) + build.sh   (U-Boot 2024.07: defconfig delta + bootmenu env)
+uboot/      patches/ (3) + build.sh   (U-Boot 2024.07: defconfig delta + bootmenu env + SPL NAND fix)
 rootfs/     packages.txt + overlay/ + configure.sh + build.sh   (Alpine -> ro UBIFS)
 flash/      ubinize.cfg + build-flasher.sh + build-sdcard.sh + uEnv*.txt + FLASHING.md
 docs/       b4-c70-32khz.md, lessons-learned.md, omap-errata-sprz278f.txt,
@@ -127,7 +127,7 @@ get USB/MMC/NAND working reliably on this specific early board.
 U-Boot **2024.07** is the last mainline release that still contains `omap3_beagle`
 (removed in the v2024.10 merge window for missing the `CONFIG_DM_I2C` deadline — see
 [docs/lessons-learned.md](docs/lessons-learned.md)). By 2024.07 mainline already carries
-the HAM1 NAND ECC, `ENV_IS_IN_NAND`, and the NAND geometry, so the port is just **two
+the HAM1 NAND ECC, `ENV_IS_IN_NAND`, and the NAND geometry, so the port is just **three
 small patches** — no `board.c` changes (musb host is config-driven under driver model).
 
 - **`0001-omap3_beagle_defconfig.patch`** — `configs/omap3_beagle_defconfig`:
@@ -143,8 +143,18 @@ small patches** — no `board.c` changes (musb host is config-driven under drive
   `nandargs` too, and it wins — which silently booted with no console). `nandmount` uses
   `ubi part rootfs 2048` (the x16-NAND UBI's VID-header offset). `usb stop` precedes each
   `bootz` for a clean kernel handoff.
+- **`0003-spl-nand-page-size.patch`** — `drivers/mtd/nand/raw/nand_spl_simple.c`: makes
+  the NAND **self-boot** chain work at all (ROM → SPL → U-Boot from NAND). After the 2023
+  unified `spl_load()` rework the SPL aligns the U-Boot read to `nand_page_size()`, which
+  returns `mtd->writesize` — a field only populated by `nand_scan()`. The OMAP3 SPL runs
+  from 64 KB SRAM and can't fit `nand_scan()` (the very reason it uses the minimal
+  `nand_spl_simple` reader), so `writesize` stays 0, `ALIGN(size, 0)` collapses to 0, and
+  the SPL loads a zero-length U-Boot (*SPL: failed to boot from all boot devices*). Return
+  the statically-known `CONFIG_SYS_NAND_PAGE_SIZE` — the page size the reader already uses
+  everywhere else. Without it only SD boot works; NAND self-boot is dead. (Latent mainline
+  bug: modern SoCs that *can* fit `nand_scan` in SPL populate `writesize` and never hit it.)
 
-Both patches are `git diff -u` output — apply with `patch -p1` (the build script does this).
+All three patches are `git diff -u` output — apply with `patch -p1` (the build script does this).
 
 ## Hardware
 
