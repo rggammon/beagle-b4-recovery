@@ -1,4 +1,2 @@
-phy-twl4030-usb
-omap2430
-r8152
-btusb
+# Required drivers (MUSB host, TWL4030 USB PHY, r8152 NIC) are built into the
+# kernel -- nothing to load here.
