@@ -171,6 +171,31 @@ All three patches are `git diff -u` output — apply with `patch -p1` (the build
 - Console: UART3 = `ttyS2` (primary), UART2 = `ttyS1` (expansion header).
 - Recovery net: hold **USER1** at power-on to boot from SD (ROM MMC-first) if NAND is bad.
 
+## GPU (PowerVR SGX530) — not accelerated here
+
+The OMAP3530's **PowerVR SGX530** GPU is **not used** by this project. There is no open,
+mainline 3D driver for it: Series5 SGX has no Mesa/Gallium driver, and the only way to
+drive it is Imagination's proprietary DDK (closed userspace GLES/EGL blobs + closed GPU
+microcode), which is version-locked to ancient kernels and a glibc/soft-float/X11
+userspace — impractical on this musl, hard-float, mainline-6.6 image. So anything
+graphical here is **software-rendered** on the Cortex-A8 (e.g. Mesa `llvmpipe`, or a
+framebuffer UI toolkit such as LVGL over `omapdrm`/KMS — see the framebuffer console on
+the minimal image). Don't expect GLES acceleration.
+
+If someone wants to change that, the relevant community efforts (this project does **not**
+depend on any of them) are:
+
+- **OpenPVRSGX** — modernizes the *GPL kernel* driver (`pvrsrvkm`) for mainline `drm`;
+  explicitly **not** reverse engineering, still needs the closed userspace/firmware:
+  <https://github.com/openpvrsgx-devgroup/linux_openpvrsgx>
+- **Mesa PowerVR (`pvr`)** — the *open* PowerVR driver, but **Rogue/AXE (Series6+) only**,
+  not Series5 SGX: <https://docs.mesa3d.org/drivers/powervr.html>
+- **`sgx540-reversing`** — clean-room RE of the SGX540 (same Series5 USSE family): USSE
+  disassembler, shader dumping, goal of rendering without the closed libGL:
+  <https://codeberg.org/Garnet/sgx540-reversing>
+- **`gma500-reverse-engineering`** — RE of the Intel GMA500 (SGX545) driver:
+  <https://github.com/TCVM/gma500-reverse-engineering>
+
 ## References
 
 - BeagleBoard Community wiki, **Issue #22** (32 kHz clock / capacitor **C70**):
