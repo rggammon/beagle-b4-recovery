@@ -1,0 +1,29 @@
+#!/sbin/openrc-run
+# First-boot only: grow the root partition to the end of the card, then online-resize the
+# ext4 filesystem to fill it. The build ships a compact ext4 image; this reclaims the rest
+# of whatever SD card it was written to. Self-disables via a stamp file (writable root).
+description="Grow root partition + filesystem to fill the card (first boot)"
+
+depend() {
+	after clock modules
+	before networking sshd
+	need localmount
+}
+
+start() {
+	local src disk part stamp=/var/lib/misc/.growroot-done
+	[ -e "$stamp" ] && return 0
+
+	src=$(findmnt -no SOURCE /) || return 0
+	case "$src" in
+		/dev/mmcblk*p*) disk=${src%p*}; part=${src##*p} ;;
+		/dev/sd[a-z][0-9]*) disk=$(echo "$src" | sed 's/[0-9]*$//'); part=$(echo "$src" | sed 's|.*[a-z]||') ;;
+		*) return 0 ;;
+	esac
+
+	ebegin "Growing $src to fill $disk"
+	growpart "$disk" "$part" 2>/dev/null || true   # no-op if already at full size
+	resize2fs "$src" 2>/dev/null || true
+	mkdir -p /var/lib/misc && : > "$stamp"
+	eend 0
+}

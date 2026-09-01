@@ -36,3 +36,13 @@ make ARCH=arm CROSS_COMPILE="$CROSS" -j"$JOBS" zImage ti/omap/omap3-beagle-ab4.d
 cp arch/arm/boot/zImage "$out/zImage"
 cp arch/arm/boot/dts/ti/omap/omap3-beagle-ab4.dtb "$out/omap3-beagle-ab4.dtb"
 echo ">> kernel #$(cat include/config/kernel.release 2>/dev/null || echo '?') -> $out/{zImage,omap3-beagle-ab4.dtb}"
+
+# Loadable modules (=m drivers, e.g. Bluetooth btusb). The recovery images build every
+# boot-critical driver =y and ignore these; the minimal writable appliance
+# (rootfs/build-min.sh) installs this tree into /lib/modules. Strip debug info; drop the
+# build/source symlinks that dangle at the host build tree. Needs `depmod` (kmod) on host.
+make ARCH=arm CROSS_COMPILE="$CROSS" -j"$JOBS" modules
+rm -rf "$out/modroot"
+make ARCH=arm CROSS_COMPILE="$CROSS" INSTALL_MOD_PATH="$out/modroot" INSTALL_MOD_STRIP=1 modules_install
+rm -f "$out"/modroot/lib/modules/*/build "$out"/modroot/lib/modules/*/source
+echo ">> modules -> $out/modroot/lib/modules/$(cat include/config/kernel.release 2>/dev/null || echo '?')/"

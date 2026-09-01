@@ -1,0 +1,3 @@
+# Minimal writable SD appliance boot env (imported by the boot menu's `bootmmc`).
+# Root is the ext4 second partition, mounted READ-WRITE (growroot resizes it on 1st boot).
+bootargs=console=ttyS2,115200n8 root=/dev/mmcblk0p2 rootfstype=ext4 rw rootwait

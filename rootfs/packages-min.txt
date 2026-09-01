@@ -1,0 +1,14 @@
+alpine-base
+alpine-keys
+openrc
+eudev
+udev-init-scripts
+kmod
+haveged
+openssh
+chrony
+ifupdown-ng
+util-linux
+e2fsprogs
+e2fsprogs-extra
+cloud-utils-growpart
