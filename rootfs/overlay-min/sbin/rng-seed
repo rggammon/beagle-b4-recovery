@@ -1,6 +1,0 @@
-#!/bin/sh
-# Seed CRNG before OpenRC dep-cache getrandom() blocks (GP RNG fused off; jitterentropy
-# unavailable on this A8). Runs as the first ::sysinit: action, before openrc sysinit.
-mount -t proc proc /proc 2>/dev/null
-/usr/sbin/haveged -w 1024
-dd if=/dev/random of=/dev/null bs=1 count=1 2>/dev/null

@@ -87,13 +87,20 @@ Hard-won notes worth remembering for this board and this class of work.
   boot), and **clock skew** (no RTC battery → clock starts at 1970 until chrony/NTP).
 
 ## Entropy on OMAP3530-GP
-- The **GP part has its RNG fused off**, and kernel `jitterentropy` fails to init on
-  the Cortex-A8 ("requirements: 9"), so `getrandom()` at boot blocks for ~4 minutes.
+- **The OMAP hardware TRNG is NOT fused off on this board** (an earlier assumption that
+  turned out wrong). It enumerates as `480a0000.rng` and the `omap_rng` driver binds
+  fine (`Random Number Generator ver. 70`); reading `/dev/hwrng` returns real bytes.
+  The reason `/dev/hwrng` was missing on the recovery image was simply that
+  `CONFIG_HW_RANDOM_OMAP` was `=m` — and the **read-only Alpine root has no
+  `/lib/modules`**, so the module never loaded. Building it **`=y`** makes `/dev/hwrng`
+  present at boot.
 - OpenRC's dependency-cache step blocks on the CRNG **before any service starts**, so a
-  normal service can't seed early enough. **Seed before OpenRC**: run `haveged` (and a
-  blocking `/dev/random` read) as the **first `::sysinit:` line in `/etc/inittab`**
-  (`sbin/rng-seed`). CRNG then seeds at ~8 s instead of ~262 s. (Cleaner than an
-  `init=` wrapper — keeps standard `init=/sbin/init`.)
+  normal service can't seed early enough. **Seed before OpenRC**: run `rngd` (rng-tools)
+  as the **first `::sysinit:` line in `/etc/inittab`** (`sbin/rng-seed`) — it FIPS-tests
+  the hardware TRNG, credits the kernel pool via `RNDADDENTROPY`, and keeps running
+  (CPU-jitter as a fallback source). CRNG seeds in a couple of seconds instead of ~262 s.
+  This replaces the old `haveged` jitter workaround with true hardware entropy. (Still
+  cleaner than an `init=` wrapper — keeps standard `init=/sbin/init`.)
 
 ## Build environment quirks (host)
 - Scripts edited on Windows need CRLF→LF before running on the board/host (a stray `\r`

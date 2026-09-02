@@ -6,7 +6,7 @@ on:
   # Manual builds only. Pushing a version tag (vX.Y.Z) also builds and publishes a release.
   workflow_dispatch:
   push:
-    tags: ['v*']
+    tags: ["v*"]
 
 jobs:
   build:
@@ -38,14 +38,8 @@ jobs:
       - name: Assemble SD-card appliance image
         run: ./flash/build-sdcard.sh
 
-      - name: Build minimal writable rootfs (ext4, loadable modules)
-        run: sudo -E ./rootfs/build-min.sh
-
-      - name: Assemble minimal writable SD-card image
-        run: ./flash/build-sdcard-min.sh
-
       - name: Checksums
-        run: cd out && sha256sum beagle-nand-flasher.img.xz beagle-sdcard.img.xz beagle-sdcard-min.img.xz > SHA256SUMS
+        run: cd out && sha256sum beagle-nand-flasher.img.xz beagle-sdcard.img.xz > SHA256SUMS
 
       - name: Upload NAND flasher image
         uses: actions/upload-artifact@v5
@@ -65,15 +59,6 @@ jobs:
             out/SHA256SUMS
           if-no-files-found: error
 
-      - name: Upload minimal writable SD-card image
-        uses: actions/upload-artifact@v5
-        with:
-          name: beagle-sdcard-min
-          path: |
-            out/beagle-sdcard-min.img.xz
-            out/SHA256SUMS
-          if-no-files-found: error
-
       - name: Publish release (on tag push)
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
@@ -81,5 +66,4 @@ jobs:
           files: |
             out/beagle-nand-flasher.img.xz
             out/beagle-sdcard.img.xz
-            out/beagle-sdcard-min.img.xz
             out/SHA256SUMS

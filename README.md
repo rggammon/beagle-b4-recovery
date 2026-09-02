@@ -26,16 +26,17 @@ See [`docs/b4-c70-32khz.md`](docs/b4-c70-32khz.md) for the full root-cause story
 
 ## What it builds
 
-**Three** SD-card images, so you can pick how the board runs:
+**Three** SD-card images — two Alpine recovery nets plus a GPU image:
 
 - **`beagle-sdcard.img.xz`** — a **run-from-SD appliance** (FAT boot + **ext4** root).
   Write it to a card, boot it, done — NAND is never touched.
 - **`beagle-nand-flasher.img.xz`** — boot it to **flash the appliance into NAND**
   (`run flashall`), after which the board runs headless from NAND with **no SD card**.
-- **`beagle-sdcard-min.img.xz`** — a **minimal, writable** Alpine base (FAT boot +
-  **read-write ext4** root) with the extra `=m` drivers shipped as **loadable modules**
-  (`/lib/modules`). It grows to fill the card on first boot; customize it on the board
-  with `apk add ...`. This is the starting point for building your own appliance.
+- **`beagle-sdcard-devuan.img.xz`** — a **Devuan + PowerVR SGX530** image (FAT boot +
+  **read-write ext4** glibc root) that actually **drives the GPU** (hardware GLES2 via
+  the closed Imagination DDK). Built from a separate OpenPVRSGX 7.2 kernel — see the
+  [GPU section](#gpu-powervr-sgx530--hardware-accelerated-on-the-devuan-image). This is
+  the image to customize with `apt install ...`.
 
 Both share the same pieces:
 
@@ -54,14 +55,14 @@ Boot flow after flashing (3 s menu, headless-safe):
 
 ## Which image should I use?
 
-| | `beagle-sdcard.img.xz` (run from SD) | `beagle-nand-flasher.img.xz` (flash to NAND) |
-|---|---|---|
-| What you do | write to a card, boot | write to a card, boot, `run flashall`, remove card |
-| Runs from | the **SD card** (ext4 root) | on-board **NAND** (UBIFS root) |
-| SD card at runtime | **required**, always in the slot | **none** — runs headless, SD-free |
-| Touches NAND | never | yes (overwrites MLO / U-Boot / rootfs in NAND) |
-| Best for | trying it out, keeping NAND untouched, easy re-imaging | a permanent SD-free recovery appliance |
-| Undo | pop the card out | keep a flasher card — hold **USER1** at power-on to boot SD |
+|                    | `beagle-sdcard.img.xz` (run from SD)                   | `beagle-nand-flasher.img.xz` (flash to NAND)                |
+| ------------------ | ------------------------------------------------------ | ----------------------------------------------------------- |
+| What you do        | write to a card, boot                                  | write to a card, boot, `run flashall`, remove card          |
+| Runs from          | the **SD card** (ext4 root)                            | on-board **NAND** (UBIFS root)                              |
+| SD card at runtime | **required**, always in the slot                       | **none** — runs headless, SD-free                           |
+| Touches NAND       | never                                                  | yes (overwrites MLO / U-Boot / rootfs in NAND)              |
+| Best for           | trying it out, keeping NAND untouched, easy re-imaging | a permanent SD-free recovery appliance                      |
+| Undo               | pop the card out                                       | keep a flasher card — hold **USER1** at power-on to boot SD |
 
 Both boot the **same** kernel, U-Boot, and `trilobite` rootfs — only the storage medium
 and root filesystem differ (ext4 on the SD block device vs UBIFS on raw NAND flash).
@@ -72,17 +73,20 @@ Either way, holding **USER1** at power-on forces an SD boot (the recovery net).
 - **Download** the prebuilt images (`beagle-sdcard.img.xz` or
   `beagle-nand-flasher.img.xz`) from the [Releases](../../releases) page, or
 - **Build it yourself** — trigger the GitHub Actions workflow manually
-  (Actions → **build** → *Run workflow*, or `gh workflow run build.yml`), or run the
+  (Actions → **build** → _Run workflow_, or `gh workflow run build.yml`), or run the
   stages locally on a Linux host with an ARM cross-toolchain:
 
   ```sh
   ./kernel/build.sh     # download 6.6.152, apply patches+config, build zImage + ab4 dtb + modules
   ./uboot/build.sh      # download 2024.07, apply 2 patches, build MLO/u-boot (one binary, SD + NAND)
   ./rootfs/build.sh     # alpine-make-rootfs + overlay -> rootfs.ubi (NAND) AND rootfs.ext4 (SD, ro)
-  ./rootfs/build-min.sh # minimal WRITABLE base + loadable modules -> rootfs-min.ext4 (SD, rw)
   ./flash/build-flasher.sh    # assemble beagle-nand-flasher.img.xz  (flash to NAND)
   ./flash/build-sdcard.sh     # assemble beagle-sdcard.img.xz        (run from SD, read-only)
-  ./flash/build-sdcard-min.sh # assemble beagle-sdcard-min.img.xz    (run from SD, writable)
+
+  # GPU image (separate 7.2 kernel + Devuan userspace; see the GPU section):
+  ./kernel/build-devuan.sh        # clone OpenPVRSGX 7.2, patch DDK core-rev, build zImage + modules
+  sudo -E ./rootfs/build-devuan.sh # mmdebstrap Devuan + SGX DDK -> rootfs-devuan.ext4
+  ./flash/build-sdcard-devuan.sh   # assemble beagle-sdcard-devuan.img.xz
   ```
 
 Then either **run from SD** (write `beagle-sdcard.img.xz` to a card and boot), or
@@ -93,13 +97,15 @@ because this board's U-Boot can't hold the whole rootfs in RAM at once).
 
 ```
 kernel/     patches/ + config + build.sh   (builds zImage, omap3-beagle-ab4.dtb = the fix, AND modules)
+            patches-devuan/ + config-devuan + build-devuan.sh   (OpenPVRSGX 7.2 GPU kernel)
 uboot/      patches/ (3) + build.sh   (U-Boot 2024.07: defconfig delta + bootmenu env + SPL NAND fix)
 rootfs/     packages.txt + overlay/ + configure.sh + build.sh   (Alpine -> ro UBIFS + ro ext4)
-            packages-min.txt + overlay-min/ + post-install-min.sh + build-min.sh   (minimal rw ext4)
-flash/      ubinize.cfg + build-flasher.sh + build-sdcard.sh + build-sdcard-min.sh + uEnv*.txt + FLASHING.md
+            keys-devuan/ + build-devuan.sh   (Devuan + SGX DDK -> rw ext4, via mmdebstrap)
+flash/      ubinize.cfg + build-flasher.sh + build-sdcard.sh + build-sdcard-devuan.sh + uEnv*.txt + FLASHING.md
+tools/      sgx-render-test.c   (self-contained EGL/GLES2 SGX530 render probe)
 docs/       b4-c70-32khz.md, lessons-learned.md, omap-errata-sprz278f.txt,
             elinux-beagleboard-community.html, beagle-c70-capacitor.jpg
-.github/workflows/build.yml
+.github/workflows/build.yml + build-devuan.yml
 ```
 
 ## Patches
@@ -140,13 +146,13 @@ small patches** — no `board.c` changes (musb host is config-driven under drive
 - **`0001-omap3_beagle_defconfig.patch`** — `configs/omap3_beagle_defconfig`:
   `SYS_MMC_MAX_BLK_COUNT=1` (SPL FAT read on this board's marginal MMC — single-block
   reads), `SYS_BOOTM_LEN=0x2000000` (the >8 MiB kernel needs a bigger reservation, else
-  the handoff resets at *Starting kernel*), musb **host** (drop `USB_MUSB_GADGET`/gadget
+  the handoff resets at _Starting kernel_), musb **host** (drop `USB_MUSB_GADGET`/gadget
   fastboot, add `USB_MUSB_HOST` + `USB_STORAGE`), `CMD_BOOTMENU`+`MENU`, our
   `MTDPARTS_DEFAULT` (rootfs @ `0x680000`), `BOOTCOMMAND="bootmenu 3"`, and disable
   `EFI_LOADER` (drops the "No EFI system partition" spam).
 - **`0002-omap3_beagle-bootmenu-env.patch`** — `include/configs/omap3_beagle.h`: the
   boot menu env. `bootnand` sets the trilobite bootargs **inline** (`console=ttyS2…
-  ubi.mtd=4… ro rootwait`) rather than via a `nandargs` var (the stock header defines
+ubi.mtd=4… ro rootwait`) rather than via a `nandargs` var (the stock header defines
   `nandargs` too, and it wins — which silently booted with no console). `nandmount` uses
   `ubi part rootfs 2048` (the x16-NAND UBI's VID-header offset). `usb stop` precedes each
   `bootz` for a clean kernel handoff.
@@ -156,11 +162,11 @@ small patches** — no `board.c` changes (musb host is config-driven under drive
   returns `mtd->writesize` — a field only populated by `nand_scan()`. The OMAP3 SPL runs
   from 64 KB SRAM and can't fit `nand_scan()` (the very reason it uses the minimal
   `nand_spl_simple` reader), so `writesize` stays 0, `ALIGN(size, 0)` collapses to 0, and
-  the SPL loads a zero-length U-Boot (*SPL: failed to boot from all boot devices*). Fall
+  the SPL loads a zero-length U-Boot (_SPL: failed to boot from all boot devices_). Fall
   back to the statically-known `CONFIG_SYS_NAND_PAGE_SIZE` when `writesize` is 0
   (`writesize ?: CONFIG_SYS_NAND_PAGE_SIZE`) — the page size the reader already uses
   everywhere else. Without it only SD boot works; NAND self-boot is dead. (Latent mainline
-  bug: modern SoCs that *can* fit `nand_scan` in SPL populate `writesize` and never hit it.)
+  bug: modern SoCs that _can_ fit `nand_scan` in SPL populate `writesize` and never hit it.)
 
 All three patches are `git diff -u` output — apply with `patch -p1` (the build script does this).
 
@@ -171,24 +177,42 @@ All three patches are `git diff -u` output — apply with `patch -p1` (the build
 - Console: UART3 = `ttyS2` (primary), UART2 = `ttyS1` (expansion header).
 - Recovery net: hold **USER1** at power-on to boot from SD (ROM MMC-first) if NAND is bad.
 
-## GPU (PowerVR SGX530) — not accelerated here
+## GPU (PowerVR SGX530) — hardware-accelerated on the Devuan image
 
-The OMAP3530's **PowerVR SGX530** GPU is **not used** by this project. There is no open,
-mainline 3D driver for it: Series5 SGX has no Mesa/Gallium driver, and the only way to
-drive it is Imagination's proprietary DDK (closed userspace GLES/EGL blobs + closed GPU
-microcode), which is version-locked to ancient kernels and a glibc/soft-float/X11
-userspace — impractical on this musl, hard-float, mainline-6.6 image. So anything
-graphical here is **software-rendered** on the Cortex-A8 (e.g. Mesa `llvmpipe`, or a
-framebuffer UI toolkit such as LVGL over `omapdrm`/KMS — see the framebuffer console on
-the minimal image). Don't expect GLES acceleration.
+The OMAP3530's **PowerVR SGX530** GPU **is** driven — but only on the separate
+**`beagle-sdcard-devuan.img.xz`** image, not on the Alpine recovery images. Series5 SGX
+has no open Mesa/Gallium driver; the only way to run it is Imagination's proprietary DDK
+(closed GLES/EGL userspace + closed GPU microcode "ukernel"), which is version-locked to
+a **glibc** userspace and a specific kernel driver. So the recovery images (musl/Alpine,
+mainline 6.6, drivers `=y`) stay **software-rendered** (Mesa `llvmpipe`), and the GPU
+lives in its own image:
 
-If someone wants to change that, the relevant community efforts (this project does **not**
-depend on any of them) are:
+- **Kernel** (`kernel/build-devuan.sh`): the **OpenPVRSGX** `linux+pvrsgx` tree (Linux
+  7.2) with the `pvrsrvkm` SGX530 driver built as a module, plus the same
+  `omap3-beagle-ab4.dtb` timer fix. No board patches are needed on 7.2 — only the one DDK
+  patch below. The DDK sources are committed on that branch, so a plain clone builds it.
+- **Userspace** (`rootfs/build-devuan.sh`): Devuan daedalus (glibc, sysvinit) + the
+  maemo-leste **ti343x DDK** (`sgx-ddk-um-ti343x`) and Mesa's `pvr` DRI loader.
+  Bootstrapped with a two-phase `mmdebstrap` so only the GLES stack is pulled in, not the
+  Hildon desktop.
+- **The B4 catch — and the one patch that fixes it:** this early board's SGX530 reports
+  silicon **core revision 1.0.3** (`0x10003`), but the only available ti343x ukernel is
+  built for **1.2.1** (`0x10201`), so the DDK's `SGXDevInitCompatCheck()` refuses to init
+  with `PVRSRV_ERROR_BUILD_MISMATCH`.
+  `kernel/patches-devuan/0005-pvrsgx-corerev-b4-exception.patch` adds our `(hw, sw)` pair
+  to the DDK's built-in `aui32CoreRevExceptions[]` whitelist, so the check is skipped for
+  *exactly* this combination while any other genuine mismatch still fails.
+- **Verified on hardware:** a surfaceless GLES2 render reports
+  `GL_RENDERER = "PowerVR SGX 530"` with correct pixel read-back (`tools/sgx-render-test.c`
+  is a self-contained `dlopen` EGL/GLES2 probe — no headers or network needed). Offscreen
+  rendering works today; the on-screen/KMS display path (`omapdrm` + PRIME) is still a
+  work in progress.
 
-- **OpenPVRSGX** — modernizes the *GPL kernel* driver (`pvrsrvkm`) for mainline `drm`;
-  explicitly **not** reverse engineering, still needs the closed userspace/firmware:
-  <https://github.com/openpvrsgx-devgroup/linux_openpvrsgx>
-- **Mesa PowerVR (`pvr`)** — the *open* PowerVR driver, but **Rogue/AXE (Series6+) only**,
+Related community efforts this builds on / references:
+
+- **OpenPVRSGX** — the _GPL kernel_ driver (`pvrsrvkm`) modernized for mainline `drm`
+  (used here): <https://github.com/openpvrsgx-devgroup/linux_openpvrsgx>
+- **Mesa PowerVR (`pvr`)** — the _open_ PowerVR driver, but **Rogue/AXE (Series6+) only**,
   not Series5 SGX: <https://docs.mesa3d.org/drivers/powervr.html>
 - **`sgx540-reversing`** — clean-room RE of the SGX540 (same Series5 USSE family): USSE
   disassembler, shader dumping, goal of rendering without the closed libGL:
@@ -202,8 +226,8 @@ depend on any of them) are:
   <https://elinux.org/BeagleBoard_Community#Revision_B> — local copy in `docs/`.
 - 2008 mailing-list thread, "GPT1 timer issue aka UART3 hang on Beagle Board":
   <https://forum.beagleboard.org/t/gpt1-timer-issue-aka-uart3-hang-issue-on-beagle-board/2962>
-- Greg Kroah-Hartman, stable backport of *"ARM: dts: Fix timer regression for
-  beagleboard revision c"* (the mainline timer-clocking fix, on LKML):
+- Greg Kroah-Hartman, stable backport of _"ARM: dts: Fix timer regression for
+  beagleboard revision c"_ (the mainline timer-clocking fix, on LKML):
   <https://lkml.org/lkml/2022/2/14/855> (5.16) · <https://lkml.org/lkml/2022/2/14/538> (5.10).
 - Mainline `omap3-beagle-ab4.dts` (the fix), Linux `arch/arm/boot/dts/ti/omap/`.
 

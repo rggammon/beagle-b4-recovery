@@ -1,0 +1,56 @@
+# CI: build the Devuan + PowerVR SGX530 SD-card image (beagle-sdcard-devuan.img.xz).
+# Separate from build.yml so the Alpine recovery images and this GPU image build
+# independently (the OpenPVRSGX 7.2 kernel + Devuan bootstrap are heavier and orthogonal).
+name: build-devuan
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["devuan-v*"]
+
+jobs:
+  build-devuan:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-arm-linux-gnueabihf bc bison flex libssl-dev swig python3-dev \
+            u-boot-tools mtools dosfstools xz-utils wget python3 kmod git \
+            e2fsprogs mmdebstrap qemu-user-static binfmt-support gpg
+          sudo update-binfmts --enable qemu-arm || true
+
+      - name: Build U-Boot 2024.07 (MLO + u-boot.img, same binary as recovery)
+        run: ./uboot/build.sh
+
+      - name: Build OpenPVRSGX 7.2 kernel (zImage + ab4 dtb + pvrsrvkm modules)
+        run: ./kernel/build-devuan.sh
+
+      - name: Build Devuan + SGX530 rootfs (ext4)
+        run: sudo -E ./rootfs/build-devuan.sh
+
+      - name: Assemble Devuan SD-card image
+        run: ./flash/build-sdcard-devuan.sh
+
+      - name: Checksum
+        run: cd out && sha256sum beagle-sdcard-devuan.img.xz > SHA256SUMS-devuan
+
+      - name: Upload Devuan SD-card image
+        uses: actions/upload-artifact@v5
+        with:
+          name: beagle-sdcard-devuan
+          path: |
+            out/beagle-sdcard-devuan.img.xz
+            out/SHA256SUMS-devuan
+          if-no-files-found: error
+
+      - name: Publish release (on devuan-v* tag push)
+        if: startsWith(github.ref, 'refs/tags/devuan-v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            out/beagle-sdcard-devuan.img.xz
+            out/SHA256SUMS-devuan

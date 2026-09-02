@@ -4,9 +4,9 @@
 # and locks down sshd to key-only root.
 set -eu
 
-# entropy seed runs from inittab (::sysinit:/sbin/rng-seed) before OpenRC, not as a
-# service -- haveged still runs as a service for ongoing entropy.
-rc-update add haveged boot        2>/dev/null || true
+# entropy: rngd (rng-tools) is started early from inittab (::sysinit:/sbin/rng-seed),
+# feeding the kernel pool from the OMAP hardware TRNG (/dev/hwrng, driver built in =y),
+# then keeps running -- no OpenRC service needed (replaces the old haveged workaround).
 rc-update add networking default  2>/dev/null || true
 rc-update add sshd default        2>/dev/null || true
 rc-update add bluetooth default   2>/dev/null || true

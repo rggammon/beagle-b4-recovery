@@ -22,7 +22,6 @@ findutils
 gawk
 git
 grep
-haveged
 htop
 i2c-tools
 ifupdown-ng
@@ -39,6 +38,7 @@ openssh
 ppp
 pv
 python3
+rng-tools
 rsync
 sed
 stress-ng

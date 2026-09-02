@@ -1,5 +1,6 @@
 # Build outputs / downloaded sources
 /build/
+/build-devuan/
 /out/
 
 # Logs and scratch

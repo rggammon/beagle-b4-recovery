@@ -1,4 +1,0 @@
-# Extra kernel modules to force-load at boot, one per line (see /etc/modules-load.d too).
-# Most drivers autoload via udev by modalias, so this is usually empty -- e.g. plugging a
-# USB Bluetooth dongle pulls `btusb` automatically. Add a name here only if you need a
-# module that has no matching device at boot.
