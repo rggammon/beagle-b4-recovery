@@ -74,6 +74,10 @@ SD boot, providing a recovery path if the NAND installation is damaged.
   images or `gh workflow run build-devuan.yml` for the Devuan GPU image. The equivalent
   local stages on a Linux host with an ARM cross-toolchain are:
 
+  The Alpine workflow defaults to `https://mirrors.edge.kernel.org/alpine`; select a
+  different `alpine_mirror` when manually dispatching it, or set `ALPINE_MIRROR` for a
+  local build.
+
   ```sh
   ./kernel/build.sh     # download 6.6.152, apply patches+config, build zImage + ab4 dtb + modules
   ./uboot/build.sh      # download 2024.07, apply 3 patches, build MLO/u-boot (one binary, SD + NAND)

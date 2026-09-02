@@ -5,12 +5,19 @@ name: build
 on:
   # Manual builds only. Pushing a version tag (vX.Y.Z) also builds and publishes a release.
   workflow_dispatch:
+    inputs:
+      alpine_mirror:
+        description: Alpine package mirror base URL
+        required: false
+        default: https://mirrors.edge.kernel.org/alpine
   push:
     tags: ["v*"]
 
 jobs:
   build:
     runs-on: ubuntu-24.04
+    env:
+      ALPINE_MIRROR: ${{ inputs.alpine_mirror || 'https://mirrors.edge.kernel.org/alpine' }}
     steps:
       - uses: actions/checkout@v5
 

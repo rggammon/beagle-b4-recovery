@@ -4,7 +4,7 @@
 # binfmt for the armv7 chroot (the CI workflow sets these up).
 #
 # Consumes out/zImage and out/omap3-beagle-ab4.dtb (run kernel/build.sh first).
-# Env: ALPINE_BRANCH (default v3.24), WORK, OUT.
+# Env: ALPINE_BRANCH (default v3.24), ALPINE_MIRROR, WORK, OUT.
 set -eu
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -12,6 +12,7 @@ out=${OUT:-$here/../out}
 work=${WORK:-$here/../build}
 AMR_VER=v0.7.0
 ALPINE_BRANCH=${ALPINE_BRANCH:-v3.24}
+ALPINE_MIRROR=${ALPINE_MIRROR:-https://dl-cdn.alpinelinux.org/alpine}
 mkdir -p "$work" "$out"
 cd "$work"
 
@@ -26,7 +27,7 @@ rm -rf rootfs
 # all-arch alpine-keys and hand apk the armv7 set via --keys-dir.
 akeys="$work/alpine-keys/usr/share/apk/keys/armv7"
 if [ ! -d "$akeys" ]; then
-    base="https://dl-cdn.alpinelinux.org/alpine/$ALPINE_BRANCH/main/x86_64"
+  base="$ALPINE_MIRROR/$ALPINE_BRANCH/main/x86_64"
     ak=$(wget -qO- "$base/" | grep -oE 'alpine-keys-[0-9.]+-r[0-9]+\.apk' | sort -u | tail -1)
     rm -rf "$work/alpine-keys"; mkdir -p "$work/alpine-keys"
     wget -qO- "$base/$ak" | tar -xz -C "$work/alpine-keys"
@@ -36,6 +37,7 @@ fi
 # call incl. --initdb, which writes /etc/apk/arch). The armv7 chroot runs under qemu binfmt.
 sudo APK_OPTS="--no-progress --arch armv7" ./alpine-make-rootfs \
     --branch "$ALPINE_BRANCH" \
+  --mirror-uri "$ALPINE_MIRROR" \
     --keys-dir "$akeys" \
     --packages "$(cat "$here/packages.txt")" \
     --script-chroot \
