@@ -30,7 +30,12 @@ jobs:
         run: ./uboot/build.sh
 
       - name: Build read-only Alpine rootfs (UBIFS)
-        run: sudo -E ./rootfs/build.sh
+        run: |
+          for attempt in 1 2 3; do
+            echo "Alpine rootfs build attempt $attempt/3"
+            sudo -E ./rootfs/build.sh && exit 0
+          done
+          exit 1
 
       - name: Assemble NAND flasher SD image
         run: ./flash/build-flasher.sh
