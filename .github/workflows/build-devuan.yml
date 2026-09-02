@@ -20,7 +20,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             gcc-arm-linux-gnueabihf bc bison flex libssl-dev swig python3-dev \
             u-boot-tools mtools dosfstools xz-utils wget python3 kmod git \
-            e2fsprogs mmdebstrap qemu-user-static binfmt-support gpg
+            e2fsprogs mmdebstrap arch-test qemu-user-static binfmt-support gpg
           sudo update-binfmts --enable qemu-arm || true
 
       - name: Build U-Boot 2024.07 (MLO + u-boot.img, same binary as recovery)

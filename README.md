@@ -1,8 +1,8 @@
 # beagle-b4-recovery
 
-A reproducible **recovery Linux image** for the original (Rev A–B4) **BeagleBoard**
-(TI OMAP3530), packaged for the on-board **NAND** so the board always boots to a
-usable shell — no SD card required.
+Three reproducible Linux images for the original (Rev A–B4) **BeagleBoard**
+(TI OMAP3530): two Alpine recovery images for SD/NAND and a writable Devuan image
+with working PowerVR SGX530 hardware acceleration.
 
 Its reason to exist is one specific, nasty hardware quirk of these early boards,
 and the fix for it:
@@ -26,7 +26,7 @@ See [`docs/b4-c70-32khz.md`](docs/b4-c70-32khz.md) for the full root-cause story
 
 ## What it builds
 
-**Three** SD-card images — two Alpine recovery nets plus a GPU image:
+**Three** downloadable images — two Alpine recovery nets plus a Devuan GPU image:
 
 - **`beagle-sdcard.img.xz`** — a **run-from-SD appliance** (FAT boot + **ext4** root).
   Write it to a card, boot it, done — NAND is never touched.
@@ -38,7 +38,7 @@ See [`docs/b4-c70-32khz.md`](docs/b4-c70-32khz.md) for the full root-cause story
   [GPU section](#gpu-powervr-sgx530--hardware-accelerated-on-the-devuan-image). This is
   the image to customize with `apt install ...`.
 
-Both share the same pieces:
+The two Alpine recovery images share these pieces:
 
 - **U-Boot 2024.07** (the last mainline release that still carries `omap3_beagle`;
   musb host mode, `ENV_IS_IN_NAND`, a boot menu) — one binary serves both the SD boot
@@ -55,43 +55,43 @@ Boot flow after flashing (3 s menu, headless-safe):
 
 ## Which image should I use?
 
-|                    | `beagle-sdcard.img.xz` (run from SD)                   | `beagle-nand-flasher.img.xz` (flash to NAND)                |
-| ------------------ | ------------------------------------------------------ | ----------------------------------------------------------- |
-| What you do        | write to a card, boot                                  | write to a card, boot, `run flashall`, remove card          |
-| Runs from          | the **SD card** (ext4 root)                            | on-board **NAND** (UBIFS root)                              |
-| SD card at runtime | **required**, always in the slot                       | **none** — runs headless, SD-free                           |
-| Touches NAND       | never                                                  | yes (overwrites MLO / U-Boot / rootfs in NAND)              |
-| Best for           | trying it out, keeping NAND untouched, easy re-imaging | a permanent SD-free recovery appliance                      |
-| Undo               | pop the card out                                       | keep a flasher card — hold **USER1** at power-on to boot SD |
+| Image | Runs from | Root filesystem | GPU | Best for |
+| ----- | --------- | --------------- | --- | -------- |
+| `beagle-sdcard.img.xz` | SD card | Alpine ext4, read-only | software rendering | bootable recovery without touching NAND |
+| `beagle-nand-flasher.img.xz` | on-board NAND after flashing from SD | Alpine UBIFS, read-only | software rendering | permanent, headless, SD-free recovery |
+| `beagle-sdcard-devuan.img.xz` | SD card | Devuan ext4, read-write | PowerVR SGX530 GLES2 | a customizable system and GPU workloads |
 
-Both boot the **same** kernel, U-Boot, and `trilobite` rootfs — only the storage medium
-and root filesystem differ (ext4 on the SD block device vs UBIFS on raw NAND flash).
-Either way, holding **USER1** at power-on forces an SD boot (the recovery net).
+The two Alpine images boot the **same** Linux 6.6 kernel, U-Boot, and `trilobite`
+rootfs; only the storage medium and root filesystem differ. The Devuan image uses its
+own OpenPVRSGX 7.2 kernel and glibc userspace. Holding **USER1** at power-on forces an
+SD boot, providing a recovery path if the NAND installation is damaged.
 
 ## Quick start
 
-- **Download** the prebuilt images (`beagle-sdcard.img.xz` or
-  `beagle-nand-flasher.img.xz`) from the [Releases](../../releases) page, or
-- **Build it yourself** — trigger the GitHub Actions workflow manually
-  (Actions → **build** → _Run workflow_, or `gh workflow run build.yml`), or run the
-  stages locally on a Linux host with an ARM cross-toolchain:
+- **Download** `beagle-sdcard.img.xz`, `beagle-nand-flasher.img.xz`, or
+  `beagle-sdcard-devuan.img.xz` from the [Releases](../../releases) page, or
+- **Build them yourself** — run `gh workflow run build.yml` for both Alpine recovery
+  images or `gh workflow run build-devuan.yml` for the Devuan GPU image. The equivalent
+  local stages on a Linux host with an ARM cross-toolchain are:
 
   ```sh
   ./kernel/build.sh     # download 6.6.152, apply patches+config, build zImage + ab4 dtb + modules
-  ./uboot/build.sh      # download 2024.07, apply 2 patches, build MLO/u-boot (one binary, SD + NAND)
+  ./uboot/build.sh      # download 2024.07, apply 3 patches, build MLO/u-boot (one binary, SD + NAND)
   ./rootfs/build.sh     # alpine-make-rootfs + overlay -> rootfs.ubi (NAND) AND rootfs.ext4 (SD, ro)
   ./flash/build-flasher.sh    # assemble beagle-nand-flasher.img.xz  (flash to NAND)
   ./flash/build-sdcard.sh     # assemble beagle-sdcard.img.xz        (run from SD, read-only)
 
   # GPU image (separate 7.2 kernel + Devuan userspace; see the GPU section):
-  ./kernel/build-devuan.sh        # clone OpenPVRSGX 7.2, patch DDK core-rev, build zImage + modules
+  ./kernel/build-devuan.sh        # clone OpenPVRSGX 7.2, apply SGX/MMC fixes, build zImage + modules
   sudo -E ./rootfs/build-devuan.sh # mmdebstrap Devuan + SGX DDK -> rootfs-devuan.ext4
   ./flash/build-sdcard-devuan.sh   # assemble beagle-sdcard-devuan.img.xz
   ```
 
-Then either **run from SD** (write `beagle-sdcard.img.xz` to a card and boot), or
-**flash to NAND** following [`flash/FLASHING.md`](flash/FLASHING.md) (a two-step write,
-because this board's U-Boot can't hold the whole rootfs in RAM at once).
+Then write either SD image (`beagle-sdcard.img.xz` or
+`beagle-sdcard-devuan.img.xz`) to a card and boot it, or use
+`beagle-nand-flasher.img.xz` to **flash the Alpine recovery to NAND** following
+[`flash/FLASHING.md`](flash/FLASHING.md). NAND flashing is a two-step write because
+this board's U-Boot cannot hold the whole rootfs in RAM at once.
 
 ## Repo layout
 
