@@ -55,11 +55,11 @@ Boot flow after flashing (3 s menu, headless-safe):
 
 ## Which image should I use?
 
-| Image | Runs from | Root filesystem | GPU | Best for |
-| ----- | --------- | --------------- | --- | -------- |
-| `beagle-sdcard.img.xz` | SD card | Alpine ext4, read-only | software rendering | bootable recovery without touching NAND |
-| `beagle-nand-flasher.img.xz` | on-board NAND after flashing from SD | Alpine UBIFS, read-only | software rendering | permanent, headless, SD-free recovery |
-| `beagle-sdcard-devuan.img.xz` | SD card | Devuan ext4, read-write | PowerVR SGX530 GLES2 | a customizable system and GPU workloads |
+| Image                         | Runs from                            | Root filesystem         | GPU                  | Best for                                |
+| ----------------------------- | ------------------------------------ | ----------------------- | -------------------- | --------------------------------------- |
+| `beagle-sdcard.img.xz`        | SD card                              | Alpine ext4, read-only  | software rendering   | bootable recovery without touching NAND |
+| `beagle-nand-flasher.img.xz`  | on-board NAND after flashing from SD | Alpine UBIFS, read-only | software rendering   | permanent, headless, SD-free recovery   |
+| `beagle-sdcard-devuan.img.xz` | SD card                              | Devuan ext4, read-write | PowerVR SGX530 GLES2 | a customizable system and GPU workloads |
 
 The two Alpine images boot the **same** Linux 6.6 kernel, U-Boot, and `trilobite`
 rootfs; only the storage medium and root filesystem differ. The Devuan image uses its
@@ -70,7 +70,7 @@ SD boot, providing a recovery path if the NAND installation is damaged.
 
 - **Download** `beagle-sdcard.img.xz`, `beagle-nand-flasher.img.xz`, or
   `beagle-sdcard-devuan.img.xz` from the [Releases](../../releases) page, or
-- **Build them yourself** — run `gh workflow run build.yml` for both Alpine recovery
+- **Build them yourself** — run `gh workflow run build-alpine-recovery.yml` for both Alpine recovery
   images or `gh workflow run build-devuan.yml` for the Devuan GPU image. The equivalent
   local stages on a Linux host with an ARM cross-toolchain are:
 
@@ -107,9 +107,9 @@ rootfs/     packages.txt + overlay/ + configure.sh + build.sh   (Alpine -> ro UB
             keys-devuan/ + build-devuan.sh   (Devuan + SGX DDK -> rw ext4, via mmdebstrap)
 flash/      ubinize.cfg + build-flasher.sh + build-sdcard.sh + build-sdcard-devuan.sh + uEnv*.txt + FLASHING.md
 tools/      sgx-render-test.c   (self-contained EGL/GLES2 SGX530 render probe)
-docs/       b4-c70-32khz.md, lessons-learned.md, omap-errata-sprz278f.txt,
+docs/       b4-c70-32khz.md, btt-hdmi7-omapdrm.md, lessons-learned.md, omap-errata-sprz278f.txt,
             elinux-beagleboard-community.html, beagle-c70-capacitor.jpg
-.github/workflows/build.yml + build-devuan.yml
+.github/workflows/build-alpine-recovery.yml + build-devuan.yml
 ```
 
 ## Patches
@@ -141,7 +141,7 @@ SGX fixes needed by each image.
 
 ### Devuan GPU kernel (against OpenPVRSGX Linux 7.2) — `kernel/patches-devuan/`
 
-`kernel/build-devuan.sh` applies these five patches to the OpenPVRSGX `linux+pvrsgx`
+`kernel/build-devuan.sh` applies these six patches to the OpenPVRSGX `linux+pvrsgx`
 branch. The AB4 timer correction is still supplied by building
 `omap3-beagle-ab4.dtb`; it is not an additional patch.
 
@@ -169,6 +169,10 @@ branch. The AB4 timer correction is still supplied by building
   all other revision mismatches fatal. It also fixes the table iterator to index by
   pair; the original loop skipped every pair after the first, so merely appending the
   B4 pair did not bypass the runtime compatibility check.
+- **`0006-mmc-clear-single-block-recovery-flag.patch`** — clears Linux 7.2's
+  `MQRQ_XFER_SINGLE_BLOCK` flag when a blk-mq tag is reused for a new request, while
+  preserving it across retries of the same failed request. Without this, tags that had
+  entered recovery remained permanently limited to CMD24 single-sector writes.
 
 #### MMC patch evidence
 
@@ -182,12 +186,13 @@ Treat `0002` as an empirical workaround, not a proven upstream-quality fix:
   found; the relevant published MMC erratum is 2.1.1.128, broken multiblock reads.
 - The upstream PBIAS regulator already declares a 100 us enable time. The extra 20 ms
   is a conservative board heuristic, not a TI-specified interval.
-- Our observed speedup compared different kernels and root filesystems with both edits
-  applied together, and the first patched 7.2 test still used the incorrect stock board
-  DT. After establishing performance with the shared `0001` DT patch, a defensible
-  causal result still requires four otherwise identical 7.2 tests: unpatched,
-  DMAE gating only, 20 ms delay only, and both, using the same card, filesystem,
-  cache-dropping procedure, and repeated read/write measurements.
+- A controlled trace mounted the same Devuan ext4 partition from Alpine/NAND on the
+  same board and card, with both kernels negotiating 25 MHz, 4-bit, 3.3 V. Linux 6.6
+  completed a contiguous 128 KiB overwrite as one 256-block CMD25 plus one CMD13 in
+  0.0266 s (4.9 MB/s). Linux 7.2 received the same 256-sector block request but emitted
+  256 CMD24 writes and 256 CMD13 polls at roughly 75 kB/s. This isolates the main 7.2
+  slowdown to sticky single-block recovery state addressed by `0006`; it still does not
+  establish either half of `0002` as necessary.
 
 ### U-Boot (against U-Boot 2024.07) — `uboot/patches/`
 
@@ -259,12 +264,13 @@ lives in its own image:
   with `PVRSRV_ERROR_BUILD_MISMATCH`.
   `kernel/patches-devuan/0005-pvrsgx-corerev-b4-exception.patch` adds our `(hw, sw)` pair
   to the DDK's built-in `aui32CoreRevExceptions[]` whitelist, so the check is skipped for
-  *exactly* this combination while any other genuine mismatch still fails.
+  _exactly_ this combination while any other genuine mismatch still fails.
 - **Verified on hardware:** a surfaceless GLES2 render reports
   `GL_RENDERER = "PowerVR SGX 530"` with correct pixel read-back (`tools/sgx-render-test.c`
   is a self-contained `dlopen` EGL/GLES2 probe — no headers or network needed). Offscreen
   rendering works today; the on-screen/KMS display path (`omapdrm` + PRIME) is still a
-  work in progress.
+  work in progress. The BTT HDMI7 mode failure, reduced-blanking solution, and validation
+  sequence are tracked in [docs/btt-hdmi7-omapdrm.md](docs/btt-hdmi7-omapdrm.md).
 
 Related community efforts this builds on / references:
 

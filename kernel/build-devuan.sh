@@ -3,9 +3,8 @@
 # the Devuan/SGX image: zImage + omap3-beagle-ab4.dtb (the C70/32 kHz timer fix) +
 # modules, including the pvrsrvkm SGX530 module (CONFIG_SGX_OMAP=m).
 #
-# Patches applied (kernel/patches-devuan/): all four recovery-kernel hardware fixes
-# (board DT, provisional MMC, NAND geometry, and TWL4030 USB) plus the DDK core-rev
-# exception/iterator repair for the B4 SGX530 r1.0.3 + ti343x r1.2.1 combination.
+# Patches applied (kernel/patches-devuan/): all four recovery-kernel hardware fixes,
+# the DDK core-rev exception/iterator repair, and a Linux 7.2 MMC recovery-state fix.
 #
 # The DDK sources are committed on the linux+pvrsgx branch, so a plain clone tracks them
 # (no submodule / separate download needed).

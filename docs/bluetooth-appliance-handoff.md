@@ -36,8 +36,9 @@ only the rootfs package set + overlay + a service need to change.
     during the recovery work — if a clone/fetch fails, retry or mirror; Alpine + kernel.org
     mirrors are reliable. (Don't assume github is hard-blocked.)
   - **NEVER use `/tmp`** on geoduck-tools (ramfs, fills fast) — use `/mnt/scratch/geoduck-tmp/`.
-- **CI:** GitHub Actions `build.yml`, **manual dispatch only** (`workflow_dispatch`; version
-  tags `v*` also build+release). Trigger with `gh workflow run build --ref main`. Produces
+- **CI:** GitHub Actions `build-alpine-recovery.yml`, **manual dispatch only**
+  (`workflow_dispatch`; version tags `v*` also build+release). Trigger with
+  `gh workflow run build-alpine-recovery.yml --ref main`. Produces
   two artifacts: `beagle-nand-flasher` and `beagle-sdcard`.
 - **CRLF→LF:** scripts are edited on Windows (CRLF) but must be LF on Linux. Commit with
   `git -c core.autocrlf=false`; the README-warning is benign. When deploying a script to the

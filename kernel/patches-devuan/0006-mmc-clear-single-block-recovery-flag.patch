@@ -1,0 +1,31 @@
+Subject: [PATCH] mmc: clear single-block recovery flag for new requests
+
+Linux 7.2 includes MQRQ_XFER_SINGLE_BLOCK, added by c7c6d4f51038 and
+extended by d34124edffdb. The flag intentionally survives requeueing so a
+failed multiblock request retries one block at a time, but it is never cleared
+when the blk-mq tag/PDU is reused for a new request.
+
+On OMAP3530 this eventually leaves every tag in recovery mode. A contiguous
+128 KiB write then arrives at the block layer as 256 sectors but is issued as
+256 CMD24 single-block writes, each followed by CMD13, yielding about 75 kB/s.
+The same card, DT settings, and workload on Linux 6.6 issue one 256-block CMD25
+and reach 4.9 MB/s.
+
+Clear the flag together with retries when RQF_DONTPREP identifies a new block
+request. Requeues retain RQF_DONTPREP and therefore preserve the intended
+single-block recovery behavior for the failed request.
+---
+ drivers/mmc/core/queue.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/drivers/mmc/core/queue.c b/drivers/mmc/core/queue.c
+--- a/drivers/mmc/core/queue.c
++++ b/drivers/mmc/core/queue.c
+@@ -293,6 +293,7 @@ static blk_status_t mmc_mq_queue_rq(struct blk_mq_hw_ctx *hctx,
+ 
+ 	if (!(req->rq_flags & RQF_DONTPREP)) {
+ 		req_to_mmc_queue_req(req)->retries = 0;
++		req_to_mmc_queue_req(req)->flags = 0;
+ 		req->rq_flags |= RQF_DONTPREP;
+ 	}
+ 

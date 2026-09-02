@@ -1,6 +1,6 @@
 # CI: download pristine U-Boot/Linux/Alpine, apply our patches, build the NAND recovery
 # flasher image. U-Boot 2024.07 produces one binary that serves both SD boot and NAND.
-name: build
+name: build-alpine-recovery
 
 on:
   # Manual builds only. Pushing a version tag (vX.Y.Z) also builds and publishes a release.

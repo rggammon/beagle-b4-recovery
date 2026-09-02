@@ -1,5 +1,5 @@
 # CI: build the Devuan + PowerVR SGX530 SD-card image (beagle-sdcard-devuan.img.xz).
-# Separate from build.yml so the Alpine recovery images and this GPU image build
+# Separate from build-alpine-recovery.yml so the Alpine recovery images and this GPU image build
 # independently (the OpenPVRSGX 7.2 kernel + Devuan bootstrap are heavier and orthogonal).
 name: build-devuan
 

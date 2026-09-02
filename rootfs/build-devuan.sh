@@ -160,9 +160,9 @@ cat > "$R/root/gpu-test.sh" <<'GPU'
 # Quick SGX530 sanity check: init services, then a surfaceless GLES render probe.
 echo "== dri devices =="; ls -l /dev/dri 2>&1
 echo "== sgx module =="; modprobe pvrsrvkm_omap3_sgx530_121 2>/dev/null; lsmod | grep -i pvr
-echo "== pvrsrvinit =="; command -v pvrsrvinit >/dev/null && pvrsrvinit && echo "(ran)" || echo "(no pvrsrvinit)"
+echo "== pvrsrvinit =="; command -v pvrsrvinit >/dev/null && timeout 15 pvrsrvinit && echo "(ran)" || echo "(failed or timed out)"
 export MESA_LOADER_DRIVER_OVERRIDE=pvr EGL_PLATFORM=surfaceless
-echo "== eglinfo =="; command -v eglinfo >/dev/null && eglinfo 2>&1 | grep -iE 'vendor|render|version' | head || echo "(no eglinfo)"
+echo "== eglinfo =="; command -v eglinfo >/dev/null && timeout 15 eglinfo 2>&1 | grep -iE 'vendor|render|version' | head || echo "(failed or timed out)"
 GPU
 chmod +x "$R/root/gpu-test.sh"
 

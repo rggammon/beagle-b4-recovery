@@ -43,6 +43,7 @@ EOF
 
 # root: authorize SSH key (from geoduck_truenas)
 mkdir -p root/.ssh && chmod 700 root/.ssh
+chown 0:0 root root/.ssh
 echo 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBW+Ivk8bMA/yJmGd9XaEoa5b/JzGHEnXPn3lApRCjm0 claude-code@geoduck-truenas' > root/.ssh/authorized_keys
 chmod 600 root/.ssh/authorized_keys
 

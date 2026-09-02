@@ -3,8 +3,9 @@
 Hard-won notes worth remembering for this board and this class of work.
 
 ## The timer bug specifically
+
 - **A dead clockevent looks like "USB/network/disk hangs but never times out."** If
-  submitted work never completes *and* never times out, suspect the kernel tick, not
+  submitted work never completes _and_ never times out, suspect the kernel tick, not
   the peripheral. Confirm with `cat /proc/interrupts` twice at idle: if the
   `clockevent` line is frozen while `date` advances, the tick is dead.
 - **Clocksource ≠ clockevent.** The free-running 32 kHz counter (clocksource) kept
@@ -16,6 +17,7 @@ Hard-won notes worth remembering for this board and this class of work.
   (U-Boot prints "Beagle Rev Ax/Bx"); Rev A–B4 need the ab4 DTB. See `b4-c70-32khz.md`.
 
 ## Debugging methodology that worked
+
 - **Debug on a RAM-root image, never the live rw NAND rootfs.** Repeated freeze +
   power-cut with uncommitted UBIFS writes corrupts the NAND master node. A RAM-root
   (initramfs) shell survives any storage/USB wedge and lets you capture the frozen state.
@@ -32,6 +34,7 @@ Hard-won notes worth remembering for this board and this class of work.
   a 2008 forum thread + the eLinux wiki. A web search would have saved days.
 
 ## NAND flashing on this board
+
 - **U-Boot with UBIFS support reserves a big (~32 MB) malloc pool**, so only ~95 MB of
   the 128 MB RAM is loadable via `fatload`. A 111 MB `rootfs.ubi` will **not** load in
   one shot (`** Reading file would overwrite reserved memory **`). Check `bdinfo` (the
@@ -50,6 +53,7 @@ Hard-won notes worth remembering for this board and this class of work.
 - Keep the **USER1 → SD** boot (ROM MMC-first) as the recovery net when reflashing NAND.
 
 ## Read-only appliance rootfs (Alpine + OpenRC)
+
 - **Root cause of past corruption was the freeze**, not UBIFS. Still, ship the recovery
   rootfs **read-only** (UBIFS `ro` + tmpfs for `/tmp`, `/var/log`) so a power-yank can
   never corrupt it. To edit config later: `mount -o remount,rw /`, edit, remount `ro`.
@@ -64,21 +68,37 @@ Hard-won notes worth remembering for this board and this class of work.
   (`/run` is a tmpfs OpenRC mounts at boot). Alpine's `default.script` sources that conf.
 
 ## USB on this board (MUSB host)
+
 - **The single MUSB port supplies very little current.** A gigabit USB NIC + hubs + a
-  flash disk on it will brown out under load: the *whole* USB tree disconnects at once
+  flash disk on it will brown out under load: the _whole_ USB tree disconnects at once
   (you'll see the top hub `usb 1-1: USB disconnect` take everything below it, then a
   full re-enumerate). Use a **powered hub** — that was the actual fix, not the NIC.
 - **Prefer a USB2 100 Mbit ASIX (AX88772, `asix`) over a gigabit RTL8153 (`r8152`).**
-  The RTL8153 draws more *and* its driver does firmware resets that MUSB recovers from
+  The RTL8153 draws more _and_ its driver does firmware resets that MUSB recovers from
   poorly; the ASIX is lower-power and far gentler on MUSB. (`rtl8153a-4.fw ... error -2`
   is a harmless missing PHY patch — `eth0` still comes up.)
-- With a **powered** hub, device *count* stops mattering for power; only shared bus
+- With a **powered** hub, device _count_ stops mattering for power; only shared bus
   bandwidth and MUSB's limited endpoints/DMA channels scale with active devices — both
   fine for a NIC + a disk. Keep the hub tree shallow (MUSB dislikes deep TT chains).
 - Build the common USB-NIC drivers **built-in (`=y`)**, not modules: `kernel/build.sh`
   doesn't `modules_install`, so `=m` NIC drivers wouldn't reach the rootfs.
 
+## MMC performance across 6.6 and 7.2
+
+- With the same board, SD card, ext4 partition, and 25 MHz/4-bit/3.3 V link, Linux 6.6
+  issued a 128 KiB overwrite as one CMD25 and reached 4.9 MB/s. Linux 7.2 split the same
+  block request into 256 CMD24 writes plus 256 CMD13 polls and reached only about
+  75 kB/s. Trace both `block:block_rq_issue` and `mmc:mmc_request_start` to distinguish
+  filesystem fragmentation from MMC request splitting.
+- Linux 7.2 gained `MQRQ_XFER_SINGLE_BLOCK` write recovery in upstream commit
+  `c7c6d4f51038` (for a TI HS200 noise erratum) and extended it to reads in
+  `d34124edffdb`. The flag survives retries intentionally, but was not cleared when the
+  blk-mq tag was reused for a new request. Clear it beside the existing `retries = 0`
+  initialization on the `!RQF_DONTPREP` path; do not disable single-block recovery for
+  an actual failed request.
+
 ## GitHub Actions / repo hygiene
+
 - **Commit shell scripts with the exec bit set**, or the Linux runner fails with
   `./x.sh: Permission denied` (exit 126). Files added from Windows are mode `100644`;
   fix with `git update-index --chmod=+x <script>` (don't rely on the working-tree bit).
@@ -87,6 +107,7 @@ Hard-won notes worth remembering for this board and this class of work.
   boot), and **clock skew** (no RTC battery → clock starts at 1970 until chrony/NTP).
 
 ## Entropy on OMAP3530-GP
+
 - **The OMAP hardware TRNG is NOT fused off on this board** (an earlier assumption that
   turned out wrong). It enumerates as `480a0000.rng` and the `omap_rng` driver binds
   fine (`Random Number Generator ver. 70`); reading `/dev/hwrng` returns real bytes.
@@ -104,6 +125,7 @@ Hard-won notes worth remembering for this board and this class of work.
   cleaner than an `init=` wrapper — keeps standard `init=/sbin/init`.)
 
 ## Build environment quirks (host)
+
 - Scripts edited on Windows need CRLF→LF before running on the board/host (a stray `\r`
   gives `$'\r': command not found`).
 - **Cross-building U-Boot 2024.07 needs `swig` + `python3-dev`** (pylibfdt); the SPL
@@ -111,17 +133,18 @@ Hard-won notes worth remembering for this board and this class of work.
   (`uboot/build.sh` retries once).
 
 ## U-Boot 2024.07 on this board
+
 - **Three board-specific gotchas that all masquerade as a boot "hang":** (1)
-  `SYS_MMC_MAX_BLK_COUNT=1`, else SPL can't read `u-boot.img` off FAT (*Error reading
-  cluster* — marginal MMC, single-block reads only); (2) `ubi part rootfs 2048` — the
-  x16-NAND UBI's VID-header offset (else *bad VID header offset 2048, expected 512*);
+  `SYS_MMC_MAX_BLK_COUNT=1`, else SPL can't read `u-boot.img` off FAT (_Error reading
+  cluster_ — marginal MMC, single-block reads only); (2) `ubi part rootfs 2048` — the
+  x16-NAND UBI's VID-header offset (else _bad VID header offset 2048, expected 512_);
   (3) `SYS_BOOTM_LEN=0x2000000` — the >8 MiB kernel needs the bigger reservation or the
-  board **resets** right at *Starting kernel* (2019's `ti_armv7_common.h` set this;
+  board **resets** right at _Starting kernel_ (2019's `ti_armv7_common.h` set this;
   2024.07's default 8 MiB is too small).
 - **A U-Boot env var can be silently shadowed.** Our `nandargs` (added early in
   `CFG_EXTRA_ENV_SETTINGS`) was overridden by the stock header's `nandargs` (last
-  definition wins), so `bootargs` became `console=${console}` *unexpanded* → the kernel
-  booted with **no console** and merely *looked* hung. Set critical bootargs **inline**,
+  definition wins), so `bootargs` became `console=${console}` _unexpanded_ → the kernel
+  booted with **no console** and merely _looked_ hung. Set critical bootargs **inline**,
   or use a name that can't collide. (`printenv <var>` at the prompt reveals the shadow.)
 - **Don't `usb start` before booting the kernel on this board.** Warming USB (EHCI/musb)
   before `bootz` intermittently wedged the handoff — this board's USB is part of the same
@@ -130,7 +153,7 @@ Hard-won notes worth remembering for this board and this class of work.
 - **Bake flash macros into the env, not `uEnv.txt`.** The NAND flasher's `run flashall`
   originally lived in the flasher SD's `uEnv.txt`, but the 2024.07 U-Boot shell never
   imports it (only the `bootmmc` path does, and it bails before the import when there's no
-  `zImage`). From the menu → *U-Boot shell* the macros were simply undefined
+  `zImage`). From the menu → _U-Boot shell_ the macros were simply undefined
   (`"flashall" not defined`). Putting them in `CFG_EXTRA_ENV_SETTINGS` makes them always
   available. Corollary: `flashall` must rewrite **MLO + U-Boot too** — flashing only the
   rootfs leaves an old U-Boot whose different `mtdparts` looks for the rootfs on the wrong
@@ -159,6 +182,6 @@ Hard-won notes worth remembering for this board and this class of work.
   boot is immune — the FAT loader passes the real file size instead of relying on `bl_len`.
 - **A stale rootfs can hide overlay fixes.** The read-only-root `resolv.conf` fix
   (`udhcpc.conf` `RESOLV_CONF=/run/resolv.conf` + `/etc/resolv.conf → /run/resolv.conf`)
-  lives in the overlay, applied *after* the apk install. A `rootfs.ubi` built before the
+  lives in the overlay, applied _after_ the apk install. A `rootfs.ubi` built before the
   overlay landed still errors (`can't create /etc/resolv.conf.NNN: Read-only file system`);
   `strings rootfs.ubifs | grep RESOLV_CONF` confirms whether the fix is baked in.
