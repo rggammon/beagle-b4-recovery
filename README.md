@@ -189,8 +189,10 @@ lives in its own image:
 
 - **Kernel** (`kernel/build-devuan.sh`): the **OpenPVRSGX** `linux+pvrsgx` tree (Linux
   7.2) with the `pvrsrvkm` SGX530 driver built as a module, plus the same
-  `omap3-beagle-ab4.dtb` timer fix. No board patches are needed on 7.2 — only the one DDK
-  patch below. The DDK sources are committed on that branch, so a plain clone builds it.
+  `omap3-beagle-ab4.dtb` timer fix. Beyond the DDK core-rev patch below, it carries one
+  board fix — `0002` (`omap_hsmmc` DMAE gating + PBIAS settle), without which this
+  marginal board's SD is crippled to ~0.6 MB/s. The DDK sources are committed on that
+  branch, so a plain clone builds it.
 - **Userspace** (`rootfs/build-devuan.sh`): Devuan daedalus (glibc, sysvinit) + the
   maemo-leste **ti343x DDK** (`sgx-ddk-um-ti343x`) and Mesa's `pvr` DRI loader.
   Bootstrapped with a two-phase `mmdebstrap` so only the GLES stack is pulled in, not the

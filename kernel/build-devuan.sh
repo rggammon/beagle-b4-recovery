@@ -3,10 +3,10 @@
 # the Devuan/SGX image: zImage + omap3-beagle-ab4.dtb (the C70/32 kHz timer fix) +
 # modules, including the pvrsrvkm SGX530 module (CONFIG_SGX_OMAP=m).
 #
-# Unlike the recovery kernel this needs NO board patches -- 7.2's mainline sources plus
-# the ab4 DTB are enough. The only change is the DDK core-rev whitelist
-# (patches-devuan/0005) so the closed ti343x 1.2.1 ukernel is allowed to run on the
-# early B4 SGX530 r1.0.3 silicon.
+# Patches applied (kernel/patches-devuan/): the DDK core-rev whitelist (0005) so the
+# closed ti343x 1.2.1 ukernel runs on the early B4 SGX530 r1.0.3 silicon, and the
+# omap_hsmmc DMAE/PBIAS fix (0002) so the marginal OMAP3 MMC isn't crippled to ~0.6 MB/s.
+# 7.2's mainline sources + the ab4 DTB otherwise cover this board.
 #
 # The DDK sources are committed on the linux+pvrsgx branch, so a plain clone tracks them
 # (no submodule / separate download needed).
@@ -32,13 +32,14 @@ if [ ! -d "$src/.git" ]; then
 fi
 cd "$src"
 
-# DDK core-rev whitelist (idempotent: skip if already applied).
+# DDK core-rev whitelist + omap_hsmmc DMAE/PBIAS fix (idempotent: skip if applied).
+# -l --fuzz=3: the hsmmc patch is ported from the 6.6 tree, so line offsets differ.
 for p in "$here"/patches-devuan/*.patch; do
-    if patch -p1 -R --dry-run -f <"$p" >/dev/null 2>&1; then
+    if patch -p1 -l -R --dry-run -f <"$p" >/dev/null 2>&1; then
         echo ">> already applied: $(basename "$p")"
     else
         echo ">> applying $(basename "$p")"
-        patch -p1 <"$p"
+        patch -p1 -l --fuzz=3 <"$p"
     fi
 done
 

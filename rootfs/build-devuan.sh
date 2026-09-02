@@ -74,7 +74,7 @@ mount --bind /dev "$R/dev";   mount --bind /dev/pts "$R/dev/pts"
 chroot "$R" apt-get -o APT::Sandbox::User=root -o Acquire::Check-Valid-Until=false update
 chroot "$R" apt-get -o APT::Sandbox::User=root -y --no-install-recommends install \
     sgx-ddk-um-ti343x sgx-ddk-um-tools libgles2-mesa libegl1-mesa libegl-mesa0 \
-    libgl1-mesa-dri libgbm1 mesa-utils
+    libgl1-mesa-dri libgbm1 mesa-utils kmscube drm-info
 cleanup
 
 echo "=== GRAFT: 7.2 SGX modules ==="

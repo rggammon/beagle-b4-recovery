@@ -19,6 +19,9 @@ ssh-keygen -A
 sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config
 sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication no/'  /etc/ssh/sshd_config
 
+# bash is installed; make it root's default login shell (nicer interactive recovery shell).
+sed -i '/^root:/ s#:/bin/[^:]*$#:/bin/bash#' /etc/passwd
+
 # root: passwordless on the (trusted, physical) serial console; ssh stays key-only
 # (PasswordAuthentication no above). `passwd -u` alone leaves a locked/`!` field on a
 # never-set account, which `login` still rejects -- so blank the shadow field outright.

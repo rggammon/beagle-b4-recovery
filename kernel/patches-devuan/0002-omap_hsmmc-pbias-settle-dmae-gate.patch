@@ -1,0 +1,41 @@
+Subject: [PATCH] omap_hsmmc: PBIAS settle + gate DMAE to data commands (B4 MMC throughput)
+
+On the early BeagleBoard (Rev A-B4) the OMAP3 HSMMC negotiates a clean
+25 MHz / 4-bit high-speed link but delivers only ~0.6 MB/s read and ~0.1 MB/s
+write, with NO CRC/timeout errors logged. Root cause: the DMA-enable (DMAE)
+command bit was set on *every* command, including the non-data status polls
+(CMD13) the driver issues between blocks, so each such command stalls waiting
+on a DMA transfer that never runs. Writes are hit hardest because they busy-poll
+the card (CMD13) after every block. Gate DMAE to commands that actually carry a
+data phase. Also add a 20 ms PBIAS/rail settle after power-on for this marginal
+board.
+
+This is the same fix as the recovery kernel's patch 0002 (Linux 6.6), ported
+for the OpenPVRSGX 7.2 Devuan kernel. Driver-only -- independent of the DTB, so
+it applies whichever omap3-beagle DTB is used. Applied with `patch -p1 -l
+--fuzz=3` (line offsets differ from 6.6; the anchor code is unchanged).
+---
+ drivers/mmc/host/omap_hsmmc.c | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/mmc/host/omap_hsmmc.c b/drivers/mmc/host/omap_hsmmc.c
+--- a/drivers/mmc/host/omap_hsmmc.c
++++ b/drivers/mmc/host/omap_hsmmc.c
+@@ -344,6 +344,8 @@ static int omap_hsmmc_set_power(struct omap_hsmmc_host *host, int power_on)
+ 		ret = omap_hsmmc_set_pbias(host, true);
+ 		if (ret)
+ 			goto err_set_voltage;
++
++		msleep(20); /* PBIAS/rail settle for marginal OMAP3 board */
+ 	} else {
+ 		ret = omap_hsmmc_disable_supply(mmc);
+ 		if (ret)
+@@ -798,7 +800,7 @@ omap_hsmmc_start_command(struct omap_hsmmc_host *host, struct mmc_command *cmd,
+ 			cmdreg &= ~(DDIR);
+ 	}
+ 
+-	if (host->use_dma)
++	if (host->use_dma && data)
+ 		cmdreg |= DMAE;
+ 
+ 	host->req_in_progress = 1;
