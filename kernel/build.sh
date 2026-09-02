@@ -20,7 +20,7 @@ rm -rf "linux-$KVER"
 tar xf "$tarball"
 cd "linux-$KVER"
 
-# Board patches (USB host / EHCI-off / NAND partitions / MMC pinmux, PBIAS+DMAE,
+# Board patches (USB host / EHCI-off / NAND partitions / MMC pinmux, provisional PBIAS+DMAE,
 # NAND ONFI x16 geometry, twl4030-usb probe-defer). Generated with `git diff`.
 for p in "$here"/patches/*.patch; do
     echo ">> applying $(basename "$p")"

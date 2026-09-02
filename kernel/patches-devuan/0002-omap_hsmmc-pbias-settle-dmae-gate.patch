@@ -1,14 +1,17 @@
-Subject: [PATCH] omap_hsmmc: PBIAS settle + gate DMAE to data commands (B4 MMC throughput)
+Subject: [PATCH] omap_hsmmc: test PBIAS settle + data-only DMAE on B4
 
 On the early BeagleBoard (Rev A-B4) the OMAP3 HSMMC negotiates a clean
 25 MHz / 4-bit high-speed link but delivers only ~0.6 MB/s read and ~0.1 MB/s
-write, with NO CRC/timeout errors logged. Root cause: the DMA-enable (DMAE)
-command bit was set on *every* command, including the non-data status polls
-(CMD13) the driver issues between blocks, so each such command stalls waiting
-on a DMA transfer that never runs. Writes are hit hardest because they busy-poll
-the card (CMD13) after every block. Gate DMAE to commands that actually carry a
-data phase. Also add a 20 ms PBIAS/rail settle after power-on for this marginal
-board.
+write, with no CRC/timeout errors logged. Gate DMAE to commands that carry a
+data phase and add a conservative 20 ms PBIAS/rail delay after power-on.
+
+This is an empirical combined workaround, not an established root-cause fix.
+The TI TRM does not require DE=0 when DP=0, upstream has set DMAE this way since
+Linux 2.6.29, and the PBIAS regulator already specifies a 100 us enable time.
+The observed comparison also changed kernels/root filesystems and did not test
+the two edits separately. Keep this patch while it is correlated with the
+working image, but isolate baseline, DMAE-only, delay-only, and combined 7.2
+builds before proposing either change upstream.
 
 This is the same fix as the recovery kernel's patch 0002 (Linux 6.6), ported
 for the OpenPVRSGX 7.2 Devuan kernel. Driver-only -- independent of the DTB, so

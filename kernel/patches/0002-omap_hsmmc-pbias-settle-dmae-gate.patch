@@ -1,3 +1,9 @@
+This is a provisional combined workaround retained because it correlates with
+the working B4 image, not a proven root-cause fix. TI does not document DE=1
+with DP=0 as an error, mainline has done so since Linux 2.6.29, and the PBIAS
+regulator already provides a 100 us enable delay. Isolate DMAE-only, delay-only,
+both, and baseline on the same kernel/rootfs/card before upstreaming.
+---
 diff --git a/drivers/mmc/host/omap_hsmmc.c b/drivers/mmc/host/omap_hsmmc.c
 index e120aeb86..7d9202669 100644
 --- a/drivers/mmc/host/omap_hsmmc.c

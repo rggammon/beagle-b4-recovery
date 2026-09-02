@@ -127,8 +127,8 @@ SGX fixes needed by each image.
   PMIC an explicit `fck` clock.
 - **`0002-omap_hsmmc-pbias-settle-dmae-gate.patch`** — `omap_hsmmc.c`: add a 20 ms
   PBIAS/rail settle after power-on (marginal board), and only set the DMA-enable command
-  bit (`DMAE`) when the command actually has a **data** phase — avoids arming DMA on
-  non-data commands.
+  bit (`DMAE`) when the command actually has a **data** phase. This is a provisional,
+  combined workaround: see [MMC patch evidence](#mmc-patch-evidence) below.
 - **`0003-nand_ids-mt29f2g16abd-onfi-x16.patch`** — `nand_ids.c`: add an explicit
   full-ID entry for this board's Micron **MT29F2G16ABD** (256 MiB, 1.8 V, x16) so it's
   detected with the correct 2K page / 128K erase / 16-bit geometry.
@@ -147,12 +147,30 @@ branch. The AB4 timer correction is still supplied by building
 
 - **`0002-omap_hsmmc-pbias-settle-dmae-gate.patch`** — ports the recovery kernel's
   OMAP HSMMC fix to 7.2: wait 20 ms for PBIAS/rail settling and set `DMAE` only for
-  commands with a data phase. On this board it improved measured SD throughput from
-  approximately 0.63 to 2.5 MB/s read and 0.10 to 8.5 MB/s write.
+  commands with a data phase. The working 6.6 image measured approximately 2.5 MB/s
+  read and 8.5 MB/s write versus 0.63 and 0.10 MB/s on the original 7.2 image, but that
+  cross-kernel comparison does not isolate either change.
 - **`0005-pvrsgx-corerev-b4-exception.patch`** — adds the exact hardware/software pair
   `(0x10003, 0x10201)` to the DDK's existing core-revision exception table, allowing
   the B4's SGX530 1.0.3 silicon to use the available ti343x 1.2.1 ukernel while leaving
   all other revision mismatches fatal.
+
+#### MMC patch evidence
+
+Treat `0002` as an empirical workaround, not a proven upstream-quality fix:
+
+- TI's OMAP35xx TRM defines `MMCHS_CMD.DE` only as selecting DMA mode for host data
+  access. It requires `DP=0` for command-only operations such as CMD13, which Linux
+  already does, but does not require `DE=0` or document a command stall when `DP=0`.
+- Mainline `omap_hsmmc` has set `DMAE` whenever the host uses DMA since the driver was
+  merged in Linux 2.6.29, and still does so. No matching OMAP3530 ES2.1 DMAE erratum was
+  found; the relevant published MMC erratum is 2.1.1.128, broken multiblock reads.
+- The upstream PBIAS regulator already declares a 100 us enable time. The extra 20 ms
+  is a conservative board heuristic, not a TI-specified interval.
+- Our observed speedup compared different kernels and root filesystems with both edits
+  applied together. A defensible causal result requires four otherwise identical 7.2
+  tests: unpatched, DMAE gating only, 20 ms delay only, and both, using the same card,
+  filesystem, cache-dropping procedure, and repeated read/write measurements.
 
 ### U-Boot (against U-Boot 2024.07) — `uboot/patches/`
 
@@ -208,10 +226,9 @@ lives in its own image:
 
 - **Kernel** (`kernel/build-devuan.sh`): the **OpenPVRSGX** `linux+pvrsgx` tree (Linux
   7.2) with the `pvrsrvkm` SGX530 driver built as a module, plus the same
-  `omap3-beagle-ab4.dtb` timer fix. Beyond the DDK core-rev patch below, it carries one
-  board fix — `0002` (`omap_hsmmc` DMAE gating + PBIAS settle), without which this
-  marginal board's SD is crippled to ~0.6 MB/s. The DDK sources are committed on that
-  branch, so a plain clone builds it.
+  `omap3-beagle-ab4.dtb` timer fix. Beyond the DDK core-rev patch below, it carries the
+  provisional `0002` MMC workaround described above. The DDK sources are committed on
+  that branch, so a plain clone builds it.
 - **Userspace** (`rootfs/build-devuan.sh`): Devuan daedalus (glibc, sysvinit) + the
   maemo-leste **ti343x DDK** (`sgx-ddk-um-ti343x`) and Mesa's `pvr` DRI loader.
   Bootstrapped with a two-phase `mmdebstrap` so only the GLES stack is pulled in, not the
