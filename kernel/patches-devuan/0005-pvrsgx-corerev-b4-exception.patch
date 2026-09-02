@@ -17,9 +17,12 @@ SGX 530", correct pixel read-back).
 The DDK sources are committed on the OpenPVRSGX linux+pvrsgx branch, so a
 plain clone tracks this file; kernel/build-devuan.sh applies the patch with
 `patch -p1`.
+The original loop mixes a pair count with raw array indexes: it increments i by
+two while comparing i against the number of pairs. With more than one pair that
+only checks the first pair. Index by pair number so every exception is checked.
 ---
- .../eurasia_km/services4/srvkm/devices/sgx/sgxinit.c | 3 ++-
- 1 file changed, 2 insertions(+), 1 deletion(-)
+ .../eurasia_km/services4/srvkm/devices/sgx/sgxinit.c | 9 +++++----
+ 1 file changed, 5 insertions(+), 4 deletions(-)
 
 diff --git a/drivers/gpu/drm/pvrsgx/1.17.4948957/eurasia_km/services4/srvkm/devices/sgx/sgxinit.c b/drivers/gpu/drm/pvrsgx/1.17.4948957/eurasia_km/services4/srvkm/devices/sgx/sgxinit.c
 --- a/drivers/gpu/drm/pvrsgx/1.17.4948957/eurasia_km/services4/srvkm/devices/sgx/sgxinit.c
@@ -32,3 +35,19 @@ diff --git a/drivers/gpu/drm/pvrsgx/1.17.4948957/eurasia_km/services4/srvkm/devi
 +		0x10003, 0x10201  /* B4 SGX530 r1.0.3 HW + ti343x r1.2.1 SW */
  	};
  	const IMG_UINT32	ui32NumCoreExceptions = sizeof(aui32CoreRevExceptions) / (2*sizeof(IMG_UINT32));
+ 	IMG_UINT	i;
+ #endif
+@@ -2773,10 +2774,10 @@ PVRSRV_ERROR SGXDevInitCompatCheck(PVRSRV_DEVICE_NODE *psDeviceNode)
+ 	 * exceptional cases the core rev compatibility check should be skipped.
+ 	 */
+ 	bCheckCoreRev = IMG_TRUE;
+-	for(i=0; i<ui32NumCoreExceptions; i+=2)
++	for(i=0; i<ui32NumCoreExceptions; i++)
+ 	{
+-	if( (psSGXFeatures->ui32CoreRev==aui32CoreRevExceptions[i]) &&
+-		(psSGXFeatures->ui32CoreRevSW==aui32CoreRevExceptions[i+1])	)
++	if( (psSGXFeatures->ui32CoreRev==aui32CoreRevExceptions[2*i]) &&
++		(psSGXFeatures->ui32CoreRevSW==aui32CoreRevExceptions[2*i+1])	)
+ 	{
+ 		PVR_LOG(("SGXInit: HW core rev (%x), SW core rev (%x) check skipped.",
+ 			psSGXFeatures->ui32CoreRev,

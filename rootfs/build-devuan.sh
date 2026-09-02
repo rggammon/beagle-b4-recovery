@@ -55,7 +55,7 @@ echo "=== PHASE 1: clean Devuan daedalus base (no maemo repo) ==="
 mmdebstrap --arch="${ARCH_DEB:-armhf}" --variant=apt \
     --keyring="$DEVKR" \
     --components="main" \
-    --include="sysvinit-core,eudev,kmod,ifupdown,isc-dhcp-client,iproute2,openssh-server,ca-certificates,haveged,e2fsprogs" \
+    --include="sysvinit-core,eudev,kmod,ifupdown,isc-dhcp-client,iproute2,openssh-server,ca-certificates,haveged,e2fsprogs,usbutils,ethtool" \
     --aptopt='APT::Sandbox::User "root"' \
     --aptopt='APT::Install-Recommends "false"' \
     --aptopt='Acquire::Retries "5"' \

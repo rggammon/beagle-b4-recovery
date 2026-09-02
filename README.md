@@ -141,19 +141,34 @@ SGX fixes needed by each image.
 
 ### Devuan GPU kernel (against OpenPVRSGX Linux 7.2) — `kernel/patches-devuan/`
 
-`kernel/build-devuan.sh` applies these two patches to the OpenPVRSGX `linux+pvrsgx`
+`kernel/build-devuan.sh` applies these five patches to the OpenPVRSGX `linux+pvrsgx`
 branch. The AB4 timer correction is still supplied by building
 `omap3-beagle-ab4.dtb`; it is not an additional patch.
 
+- **`0001-omap3-beagle-board-usb-mmc-nand.patch`** — applies the same board DT
+  corrections as the recovery kernel: force the MUSB OTG port into host mode, disable
+  the unused EHCI/`hsusb2` path, and configure MMC1 as a 4-bit, 25 MHz slot without the
+  incorrect `vqmmc=vsim` supply. The first Devuan image omitted this patch: MUSB
+  registered its root hub but never reported a downstream connect for the powered
+  hub/ASIX adapter, and SD writes measured only 103 kB/s.
 - **`0002-omap_hsmmc-pbias-settle-dmae-gate.patch`** — ports the recovery kernel's
   OMAP HSMMC fix to 7.2: wait 20 ms for PBIAS/rail settling and set `DMAE` only for
-  commands with a data phase. The working 6.6 image measured approximately 2.5 MB/s
-  read and 8.5 MB/s write versus 0.63 and 0.10 MB/s on the original 7.2 image, but that
-  cross-kernel comparison does not isolate either change.
+  commands with a data phase. This patch alone did not improve the stock-DT 7.2 image,
+  which still wrote at 103 kB/s; retest after the `0001` DT corrections before drawing
+  a conclusion about either driver edit.
+- **`0003-nand_ids-mt29f2g16abd-onfi-x16.patch`** — applies the same full-ID NAND
+  geometry fix as recovery. Without it, 7.2 misdetected the physical 256 MiB, 2 KiB-page,
+  128 KiB-erase chip as 128 MiB with 1 KiB pages and 64 KiB eraseblocks.
+- **`0004-phy-twl4030-usb-probe-defer.patch`** — applies the same regulator-error and
+  no-autosuspend TWL4030 PHY fix as recovery. The stock 7.2 image registered the MUSB
+  host/root hub but never detected the connected powered hub; rebinding MUSB reproduced
+  the same no-connect state, making PHY power/DPLL stability directly relevant.
 - **`0005-pvrsgx-corerev-b4-exception.patch`** — adds the exact hardware/software pair
   `(0x10003, 0x10201)` to the DDK's existing core-revision exception table, allowing
   the B4's SGX530 1.0.3 silicon to use the available ti343x 1.2.1 ukernel while leaving
-  all other revision mismatches fatal.
+  all other revision mismatches fatal. It also fixes the table iterator to index by
+  pair; the original loop skipped every pair after the first, so merely appending the
+  B4 pair did not bypass the runtime compatibility check.
 
 #### MMC patch evidence
 
@@ -168,9 +183,11 @@ Treat `0002` as an empirical workaround, not a proven upstream-quality fix:
 - The upstream PBIAS regulator already declares a 100 us enable time. The extra 20 ms
   is a conservative board heuristic, not a TI-specified interval.
 - Our observed speedup compared different kernels and root filesystems with both edits
-  applied together. A defensible causal result requires four otherwise identical 7.2
-  tests: unpatched, DMAE gating only, 20 ms delay only, and both, using the same card,
-  filesystem, cache-dropping procedure, and repeated read/write measurements.
+  applied together, and the first patched 7.2 test still used the incorrect stock board
+  DT. After establishing performance with the shared `0001` DT patch, a defensible
+  causal result still requires four otherwise identical 7.2 tests: unpatched,
+  DMAE gating only, 20 ms delay only, and both, using the same card, filesystem,
+  cache-dropping procedure, and repeated read/write measurements.
 
 ### U-Boot (against U-Boot 2024.07) — `uboot/patches/`
 
@@ -227,13 +244,15 @@ lives in its own image:
 
 - **Kernel** (`kernel/build-devuan.sh`): the **OpenPVRSGX** `linux+pvrsgx` tree (Linux
   7.2) with the `pvrsrvkm` SGX530 driver built as a module, plus the same
-  `omap3-beagle-ab4.dtb` timer fix. Beyond the DDK core-rev patch below, it carries the
-  provisional `0002` MMC workaround described above. The DDK sources are committed on
-  that branch, so a plain clone builds it.
+  `omap3-beagle-ab4.dtb` timer fix and all four recovery-kernel hardware patches.
+  Beyond the DDK core-rev patch below, this includes the provisional `0002` MMC
+  workaround described above. The DDK sources are committed on that branch, so a plain
+  clone builds it.
 - **Userspace** (`rootfs/build-devuan.sh`): Devuan daedalus (glibc, sysvinit) + the
   maemo-leste **ti343x DDK** (`sgx-ddk-um-ti343x`) and Mesa's `pvr` DRI loader.
-  Bootstrapped with a two-phase `mmdebstrap` so only the GLES stack is pulled in, not the
-  Hildon desktop.
+  `usbutils` (`lsusb`) and `ethtool` are included for network bring-up diagnostics.
+  Bootstrapped with a two-phase `mmdebstrap` so only the GLES stack is pulled in, not
+  the Hildon desktop.
 - **The B4 catch — and the one patch that fixes it:** this early board's SGX530 reports
   silicon **core revision 1.0.3** (`0x10003`), but the only available ti343x ukernel is
   built for **1.2.1** (`0x10201`), so the DDK's `SGXDevInitCompatCheck()` refuses to init

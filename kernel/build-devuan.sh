@@ -3,10 +3,9 @@
 # the Devuan/SGX image: zImage + omap3-beagle-ab4.dtb (the C70/32 kHz timer fix) +
 # modules, including the pvrsrvkm SGX530 module (CONFIG_SGX_OMAP=m).
 #
-# Patches applied (kernel/patches-devuan/): the DDK core-rev whitelist (0005) so the
-# closed ti343x 1.2.1 ukernel runs on the early B4 SGX530 r1.0.3 silicon, and the
-# provisional omap_hsmmc DMAE/PBIAS workaround (0002), pending same-kernel isolation.
-# 7.2's mainline sources + the ab4 DTB otherwise cover this board.
+# Patches applied (kernel/patches-devuan/): all four recovery-kernel hardware fixes
+# (board DT, provisional MMC, NAND geometry, and TWL4030 USB) plus the DDK core-rev
+# exception/iterator repair for the B4 SGX530 r1.0.3 + ti343x r1.2.1 combination.
 #
 # The DDK sources are committed on the linux+pvrsgx branch, so a plain clone tracks them
 # (no submodule / separate download needed).
@@ -32,7 +31,7 @@ if [ ! -d "$src/.git" ]; then
 fi
 cd "$src"
 
-# DDK core-rev whitelist + provisional omap_hsmmc DMAE/PBIAS workaround.
+# Recovery hardware fixes + DDK core-rev exception.
 # -l --fuzz=3: the hsmmc patch is ported from the 6.6 tree, so line offsets differ.
 for p in "$here"/patches-devuan/*.patch; do
     if patch -p1 -l -R --dry-run -f <"$p" >/dev/null 2>&1; then

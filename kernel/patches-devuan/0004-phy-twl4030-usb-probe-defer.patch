@@ -1,0 +1,45 @@
+diff --git a/drivers/phy/ti/phy-twl4030-usb.c b/drivers/phy/ti/phy-twl4030-usb.c
+index e5918d3b4..0874571ee 100644
+--- a/drivers/phy/ti/phy-twl4030-usb.c
++++ b/drivers/phy/ti/phy-twl4030-usb.c
+@@ -531,7 +531,7 @@ static int twl4030_usb_ldo_init(struct twl4030_usb *twl)
+ 
+ 	twl->usb3v1 = devm_regulator_get(twl->dev, "usb3v1");
+ 	if (IS_ERR(twl->usb3v1))
+-		return -ENODEV;
++		return PTR_ERR(twl->usb3v1);
+ 
+ 	twl_i2c_write_u8(TWL_MODULE_PM_RECEIVER, 0, VUSB3V1_TYPE);
+ 
+@@ -540,7 +540,7 @@ static int twl4030_usb_ldo_init(struct twl4030_usb *twl)
+ 
+ 	twl->usb1v5 = devm_regulator_get(twl->dev, "usb1v5");
+ 	if (IS_ERR(twl->usb1v5))
+-		return -ENODEV;
++		return PTR_ERR(twl->usb1v5);
+ 
+ 	twl_i2c_write_u8(TWL_MODULE_PM_RECEIVER, 0, VUSB1V5_TYPE);
+ 
+@@ -549,7 +549,7 @@ static int twl4030_usb_ldo_init(struct twl4030_usb *twl)
+ 
+ 	twl->usb1v8 = devm_regulator_get(twl->dev, "usb1v8");
+ 	if (IS_ERR(twl->usb1v8))
+-		return -ENODEV;
++		return PTR_ERR(twl->usb1v8);
+ 
+ 	twl_i2c_write_u8(TWL_MODULE_PM_RECEIVER, 0, VUSB1V8_TYPE);
+ 
+@@ -781,9 +781,10 @@ static int twl4030_usb_probe(struct platform_device *pdev)
+ 	if (err)
+ 		return err;
+ 
+-	pm_runtime_mark_last_busy(&pdev->dev);
+-	pm_runtime_put_autosuspend(twl->dev);
+-
++	/* Hold the probe-time runtime-PM reference: never autosuspend the PHY.
++	 * On this marginal OMAP3 board the DPLL re-lock after an autosuspend
++	 * power-down intermittently times out; keeping the PHY powered (like the
++	 * pre-DT board-file driver) locks the DPLL once at probe and never re-cycles it. */
+ 	return 0;
+ }
+ 

@@ -1,0 +1,14 @@
+diff --git a/drivers/mtd/nand/raw/nand_ids.c b/drivers/mtd/nand/raw/nand_ids.c
+index 650351c62..dd66b4b97 100644
+--- a/drivers/mtd/nand/raw/nand_ids.c
++++ b/drivers/mtd/nand/raw/nand_ids.c
+@@ -21,6 +21,9 @@
+  * extended chip ID.
+  */
+ struct nand_flash_dev nand_flash_ids[] = {
++	{"MT29F2G16ABD 256M 1.8V 16-bit",
++		{ .id = {0x2c, 0xba, 0x80, 0x55, 0x50, 0x40, 0x00, 0x40} },
++		  SZ_2K, SZ_256, SZ_128K, NAND_BUSWIDTH_16, 8, 64, NAND_ECC_INFO(1, SZ_512), },
+ 	/*
+ 	 * Some incompatible NAND chips share device ID's and so must be
+ 	 * listed by full ID. We list them first so that we can easily identify
