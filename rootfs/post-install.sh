@@ -4,9 +4,8 @@
 # and locks down sshd to key-only root.
 set -eu
 
-# entropy: rngd (rng-tools) is started early from inittab (::sysinit:/sbin/rng-seed),
-# feeding the kernel pool from the OMAP hardware TRNG (/dev/hwrng, driver built in =y),
-# then keeps running -- no OpenRC service needed (replaces the old haveged workaround).
+# entropy: /sbin/rng-seed waits early from inittab (::sysinit:/sbin/rng-seed) until
+# Linux's hwrng thread initializes the CRNG from OMAP /dev/hwrng (driver built in =y).
 rc-update add networking default  2>/dev/null || true
 rc-update add sshd default        2>/dev/null || true
 rc-update add bluetooth default   2>/dev/null || true

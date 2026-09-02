@@ -28,7 +28,7 @@ auto eth0
 iface eth0 inet dhcp
 EOF
 
-# services in default runlevel (rngd is started early from inittab via sbin/rng-seed)
+# services in default runlevel (inittab waits for CRNG readiness via sbin/rng-seed)
 mkdir -p etc/runlevels/default
 for s in sshd networking; do [ -f etc/init.d/$s ] && ln -sf /etc/init.d/$s etc/runlevels/default/$s; done
 [ -f etc/init.d/bluetooth ] && ln -sf /etc/init.d/bluetooth etc/runlevels/default/bluetooth

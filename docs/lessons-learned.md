@@ -94,11 +94,12 @@ Hard-won notes worth remembering for this board and this class of work.
   `CONFIG_HW_RANDOM_OMAP` was `=m` — and the **read-only Alpine root has no
   `/lib/modules`**, so the module never loaded. Building it **`=y`** makes `/dev/hwrng`
   present at boot.
-- OpenRC's dependency-cache step blocks on the CRNG **before any service starts**, so a
-  normal service can't seed early enough. **Seed before OpenRC**: run `rngd` (rng-tools)
-  as the **first `::sysinit:` line in `/etc/inittab`** (`sbin/rng-seed`) — it FIPS-tests
-  the hardware TRNG, credits the kernel pool via `RNDADDENTROPY`, and keeps running
-  (CPU-jitter as a fallback source). CRNG seeds in a couple of seconds instead of ~262 s.
+- OpenRC's dependency-cache step blocks on the CRNG **before any service starts**. Linux
+  6.6 automatically starts an `hwrng` kernel feeder for the OMAP driver, whose declared
+  quality is 900/1024, and credits its output to the CRNG. Make a blocking one-byte
+  `/dev/random` read the **first `::sysinit:` line in `/etc/inittab`** (`sbin/rng-seed`)
+  to gate OpenRC on CRNG readiness; no userspace `rngd` is needed. On hardware, OMAP RNG
+  registered at 3.195 s and the CRNG completed at 3.204 s instead of ~262 s.
   This replaces the old `haveged` jitter workaround with true hardware entropy. (Still
   cleaner than an `init=` wrapper — keeps standard `init=/sbin/init`.)
 

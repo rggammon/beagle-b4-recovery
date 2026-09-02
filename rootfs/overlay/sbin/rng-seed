@@ -1,7 +1,6 @@
 #!/bin/sh
-# Seed the CRNG before OpenRC's dep-cache getrandom() blocks. The OMAP hardware TRNG
-# (480a0000.rng) is built in (=y), so /dev/hwrng exists at boot; rngd FIPS-tests it and
-# credits the kernel entropy pool, then keeps running (CPU-jitter source as fallback).
+# Wait for CRNG initialization before OpenRC's dep-cache uses getrandom(). The built-in
+# OMAP driver registers a 900/1024-quality hwrng, and Linux's hwrng thread feeds and
+# credits it to the kernel pool without a userspace daemon.
 mount -t proc proc /proc 2>/dev/null
-/usr/sbin/rngd
 dd if=/dev/random of=/dev/null bs=1 count=1 2>/dev/null
