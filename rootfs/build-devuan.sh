@@ -42,8 +42,10 @@ gpg --dearmor < "$keys/maemo-main-repo-key.asc" > "$work/maemo-main.gpg"
 gpg --dearmor < "$keys/maemo-extras-key.asc"    > "$work/maemo-extras.gpg"
 
 cleanup() {
-    for mp in $(awk '{print $2}' /proc/mounts | grep "^$R" | sort -r); do
-        umount -R "$mp" 2>/dev/null || umount -lf "$mp" 2>/dev/null || true
+    for mp in "$R/dev/pts" "$R/dev" "$R/sys" "$R/proc"; do
+        if mountpoint -q "$mp"; then
+            umount "$mp" 2>/dev/null || umount -l "$mp" 2>/dev/null || true
+        fi
     done
 }
 trap cleanup EXIT
@@ -117,6 +119,12 @@ SYSV
 chmod 755 "$R/etc/init.d/powervr"
 chroot "$R" update-rc.d powervr defaults
 cleanup
+for mp in "$R/dev/pts" "$R/dev" "$R/sys" "$R/proc"; do
+    if mountpoint -q "$mp"; then
+        echo "failed to unmount $mp" >&2
+        exit 1
+    fi
+done
 
 echo "=== GRAFT: 7.2 SGX modules ==="
 krel=$(ls "$mods/lib/modules" | head -1)
