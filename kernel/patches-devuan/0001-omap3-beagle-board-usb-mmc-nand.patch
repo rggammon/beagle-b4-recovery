@@ -37,10 +37,11 @@ index 4d9a8eab6..e3c9b80e3 100644
  		interrupts = <7>; /* SYS_NIRQ cascaded to intc */
  		interrupt-parent = <&intc>;
  
-@@ -283,9 +297,12 @@ &i2c3 {
+@@ -283,9 +297,13 @@ &i2c3 {
  };
  
  &mmc1 {
++	compatible = "ti,omap3-pre-es3-hsmmc";
 +	pinctrl-names = "default";
 +	pinctrl-0 = <&mmc1_pins>;
  	vmmc-supply = <&vmmc1>;

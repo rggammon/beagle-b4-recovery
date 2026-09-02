@@ -284,6 +284,35 @@ Related community efforts this builds on / references:
 - **`gma500-reverse-engineering`** — RE of the Intel GMA500 (SGX545) driver:
   <https://github.com/TCVM/gma500-reverse-engineering>
 
+## Upstream candidates
+
+Keep these as separate Linux submissions; they address independent problems and have
+different maintainers and evidence.
+
+1. **Mark BeagleBoard AB4 MMC1 as pre-ES3.** Add an `&mmc1` override with
+  `compatible = "ti,omap3-pre-es3-hsmmc"` to upstream
+  `omap3-beagle-ab4.dts`, not the generic Beagle DTS. TI OMAP35xx erratum 2.1.1.128
+  applies to ES2.1 and earlier; this board reports OMAP3530 ES2.1. A controlled Linux
+  6.6 trace showed CMD18 multiblock reads failing with `-EILSEQ`, followed by legacy
+  CMD17 recovery. Linux already implements the workaround behind this compatible, and
+  `omap3-ldp.dts` is an upstream precedent. Before submission, verify the driver logs
+  `multiblock reads disabled due to 35xx erratum 2.1.1.128`, sustained reads have no
+  CMD18/data errors, and writes still use CMD25 on both repository kernels.
+2. **Reset MMC single-block recovery state for a new blk-mq request.** Linux commits
+  `c7c6d4f51038` and `d34124edffdb` introduced `MQRQ_XFER_SINGLE_BLOCK` for write and
+  read retries. The flag correctly persists while the same failed request is requeued,
+  but it resides in reusable tag-private data and is not reset with `retries` when
+  `RQF_DONTPREP` identifies a new request. On 7.2, read recovery from the OMAP erratum
+  eventually contaminated tags and changed unrelated contiguous writes from one CMD25
+  into hundreds of CMD24/CMD13 pairs. Patch `0006` clears `flags` only on the existing
+  new-request initialization path. Hardware validation on 7.2 provoked genuine CMD18
+  failures (`-EILSEQ`): the failed reads still retried as CMD17, while the immediately
+  following write returned to one 256-block CMD25 at 1.7 MB/s. This confirms recovery
+  remains sticky within its request but no longer leaks into unrelated requests.
+
+Do not upstream `0002` in its current combined form. Its DMAE and 20 ms PBIAS changes
+remain unisolated and are not supported by a matching TI erratum.
+
 ## References
 
 - BeagleBoard Community wiki, **Issue #22** (32 kHz clock / capacitor **C70**):
