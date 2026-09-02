@@ -115,8 +115,8 @@ docs/       b4-c70-32khz.md, lessons-learned.md, omap-errata-sprz278f.txt,
 ## Patches
 
 The timer fix itself is **not** a patch — it's building the mainline
-`omap3-beagle-ab4.dtb`. The patches below are small, unrelated board fixes needed to
-get USB/MMC/NAND working reliably on this specific early board.
+`omap3-beagle-ab4.dtb`. The kernel patch sets below contain the additional board and
+SGX fixes needed by each image.
 
 ### Kernel (against Linux 6.6.152) — `kernel/patches/`
 
@@ -138,6 +138,21 @@ get USB/MMC/NAND working reliably on this specific early board.
   board the DPLL re-lock after an autosuspend power-down intermittently times out;
   keeping the PHY powered (like the old board-file driver) locks the DPLL once and never
   re-cycles it. This is the counterpart to the USB flakiness the C70 note warns about.
+
+### Devuan GPU kernel (against OpenPVRSGX Linux 7.2) — `kernel/patches-devuan/`
+
+`kernel/build-devuan.sh` applies these two patches to the OpenPVRSGX `linux+pvrsgx`
+branch. The AB4 timer correction is still supplied by building
+`omap3-beagle-ab4.dtb`; it is not an additional patch.
+
+- **`0002-omap_hsmmc-pbias-settle-dmae-gate.patch`** — ports the recovery kernel's
+  OMAP HSMMC fix to 7.2: wait 20 ms for PBIAS/rail settling and set `DMAE` only for
+  commands with a data phase. On this board it improved measured SD throughput from
+  approximately 0.63 to 2.5 MB/s read and 0.10 to 8.5 MB/s write.
+- **`0005-pvrsgx-corerev-b4-exception.patch`** — adds the exact hardware/software pair
+  `(0x10003, 0x10201)` to the DDK's existing core-revision exception table, allowing
+  the B4's SGX530 1.0.3 silicon to use the available ti343x 1.2.1 ukernel while leaving
+  all other revision mismatches fatal.
 
 ### U-Boot (against U-Boot 2024.07) — `uboot/patches/`
 
