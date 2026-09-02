@@ -1,4 +1,7 @@
 # Devuan + SGX530 SD image boot env (imported by the boot menu's `bootmmc`, which bootz's).
 # Root is the ext4 second partition, mounted read-write (glibc rootfs carries /lib/modules).
 # net.ifnames=0 keeps the USB NIC as eth0 for the dhcp interfaces stanza.
-bootargs=console=ttyS2,115200n8 root=/dev/mmcblk0p2 rootfstype=ext4 rw rootwait net.ifnames=0
+# video=DVI-D-1:1024x600@60e forces a 1024x600 CVT mode on the DVI/HDMI output and
+# force-enables the connector: the BTT HDMI7 (7" 1024x600) hands back no usable EDID over
+# this board's DVI DDC, so omapdrm otherwise reports it disconnected. 'e' = force enabled.
+bootargs=console=ttyS2,115200n8 root=/dev/mmcblk0p2 rootfstype=ext4 rw rootwait net.ifnames=0 video=DVI-D-1:1024x600@60e
