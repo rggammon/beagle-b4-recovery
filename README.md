@@ -211,7 +211,8 @@ All three patches are `git diff -u` output — apply with `patch -p1` (the build
 
 - BeagleBoard OMAP3530-GP ES2.1, **Rev Ax/Bx (B4)**, 128 MB RAM, 256 MB NAND
   (Micron MT29F2G16ABD, HAM1 ECC), no RTC battery.
-- Console: UART3 = `ttyS2` (primary), UART2 = `ttyS1` (expansion header).
+- Consoles: UART3 = `ttyS2` (primary) and UART2 = `ttyS1` (expansion header), with
+  115200 8N1 login gettys in both Alpine and Devuan images.
 - Recovery net: hold **USER1** at power-on to boot from SD (ROM MMC-first) if NAND is bad.
 
 ## GPU (PowerVR SGX530) — hardware-accelerated on the Devuan image

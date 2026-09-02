@@ -140,6 +140,7 @@ echo beagle > "$R/etc/hostname"
 grep -q beagle "$R/etc/hosts" || echo "127.0.1.1 beagle" >> "$R/etc/hosts"
 [ -f "$R/etc/inittab" ] || echo "id:2:initdefault:" > "$R/etc/inittab"
 grep -q ttyS2 "$R/etc/inittab" || echo "T2:23:respawn:/sbin/agetty -L 115200 ttyS2 vt100" >> "$R/etc/inittab"
+grep -q ttyS1 "$R/etc/inittab" || echo "T1:23:respawn:/sbin/agetty -L 115200 ttyS1 vt100" >> "$R/etc/inittab"
 # getty on the framebuffer console (tty1) -> a login on the HDMI panel (omapdrm fbcon).
 grep -q "tty1" "$R/etc/inittab" || echo "1:2345:respawn:/sbin/agetty --noclear tty1 linux" >> "$R/etc/inittab"
 cat > "$R/etc/network/interfaces" <<'NET'
