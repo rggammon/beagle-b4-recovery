@@ -67,8 +67,8 @@ CVT reduced blanking uses a 32-pixel horizontal sync pulse, within OMAP3's
 `flash/uEnv-sdcard-devuan.txt` and copied to `uEnv.txt` in the FAT boot
 partition.
 
-This solution is not yet hardware-validated. After booting an image containing
-it, verify:
+This mode is hardware-validated. OMAP DRM reports a connected 1024x600
+connector and fbcon switches to a 128x37 framebuffer console. Verify with:
 
 ```sh
 dmesg | grep -iE 'forcing DVI|mode not supported|Cannot find'
@@ -78,7 +78,7 @@ drm_info | sed -n '/DVI-D/,/Encoders/p'
 ```
 
 Expected results are `connected`, a `1024x600` mode, no `MODE_BAD` message for
-that mode, and an active CRTC after a framebuffer or KMS client starts.
+that mode, and an active CRTC.
 
 For detailed mode-pruning diagnostics:
 
@@ -88,20 +88,37 @@ kmscube -D /dev/dri/card1
 dmesg | tail -100
 ```
 
-## Remaining GPU-to-display work
+## SGX rendering on HDMI
 
-A valid OMAP scanout mode proves only the display half. Hardware-accelerated
-on-screen rendering still requires the Series5 PVR userspace to render through
-`card0` and pass buffers to OMAP DRM `card1` through PRIME. Validate in this
-order:
+Hardware-accelerated rendering is visible on the panel. The working path uses
+OMAP DRM for KMS and an `omapdrm_dri.so` alias for Mesa's Series5 SGX driver:
 
-1. `pvrsrvinit` accepts the B4's SGX530 1.0.3 hardware with the ti343x 1.2.1
-   ukernel.
-2. The surfaceless GLES probe reports `PowerVR SGX 530` and correct pixel
-   readback.
-3. OMAP DRM drives the BTT panel at 1024x600 reduced blanking.
-4. A GBM/KMS test confirms PVR-rendered buffers can be imported and scanned out
-   by OMAP DRM.
+```sh
+kmscube -D /dev/dri/by-path/platform-omapdrm.0-card -v 1024x600
+```
+
+Maemo-Leste's Mesa source supports `-Dgallium-sgx-alias=omapdrm`, but its
+Daedalus binary package does not enable it. The image builds and installs that
+single alias from the checksum-pinned matching Mesa source.
+
+The image reserves `cma=48M`: the proprietary display path requests a
+contiguous 4,800-page (18.75 MiB) buffer pool, in addition to OMAP framebuffer
+allocations. A 16 MiB CMA pool cannot satisfy it, and 32 MiB was fragile after
+other allocations. CMA remains available for movable pages while idle.
+
+Daedalus' packaged `kmscube` incorrectly passes `DRM_FORMAT_MOD_INVALID` to
+OMAP DRM. The image builds pinned upstream commit
+`f60e50e887d3c49e91ac9b06d8199b36152632fa`, whose framebuffer path correctly
+falls back to unmodified `drmModeAddFB2`.
+
+Measured results:
+
+- Surfaceless SGX clear/readback: correct `PowerVR SGX 530` output.
+- 1024x600 synchronized offscreen clears: about 142.5 fps.
+- Windowed HDMI cube: about 2.3 fps, dominated by the legacy display
+   swapchain/synchronization path rather than SGX fill rate.
+- Continuous rendering is stable. Mesa/DDK process teardown can trigger SGX
+   watchdog recovery; the GPU recovers and remains usable.
 
 If CVT reduced blanking is rejected or the panel does not lock to it, the next
 fallback is a fixed `panel-dpi` timing in the Beagle DT or a captured custom EDID

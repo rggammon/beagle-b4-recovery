@@ -22,6 +22,7 @@ work=${WORK:-$here/../build-devuan}
 keys="$here/keys-devuan"
 R="$work/rootfs-devuan"
 mods="$out/modroot-devuan"
+cross=${CROSS_COMPILE:-arm-linux-gnueabihf-}
 mkdir -p "$out" "$work"
 
 [ "$(id -u)" = 0 ] || { echo "run as root (sudo -E $0)" >&2; exit 1; }
@@ -55,7 +56,7 @@ echo "=== PHASE 1: clean Devuan daedalus base (no maemo repo) ==="
 mmdebstrap --arch="${ARCH_DEB:-armhf}" --variant=apt \
     --keyring="$DEVKR" \
     --components="main" \
-    --include="sysvinit-core,eudev,kmod,ifupdown,isc-dhcp-client,iproute2,openssh-server,ca-certificates,haveged,e2fsprogs,usbutils,ethtool" \
+    --include="sysvinit-core,eudev,kmod,ifupdown,isc-dhcp-client,iproute2,iputils-ping,chrony,openssh-server,ca-certificates,e2fsprogs,usbutils,ethtool" \
     --aptopt='APT::Sandbox::User "root"' \
     --aptopt='APT::Install-Recommends "false"' \
     --aptopt='Acquire::Retries "5"' \
@@ -88,6 +89,69 @@ chroot "$R" apt-get -o APT::Sandbox::User=root -y --no-install-recommends instal
     libgl1-mesa-dri libgbm1 mesa-utils kmscube drm-info
 rm -f "$R/usr/sbin/rc-update"
 
+# The packaged Mesa enables SGX but omits its omapdrm display-driver alias. Build
+# that alias from the exact Maemo-Leste source, then build a newer kmscube whose
+# framebuffer path handles DRM_FORMAT_MOD_INVALID correctly.
+chroot "$R" apt-get -o APT::Sandbox::User=root -y --no-install-recommends install \
+    libdrm-dev libgbm-dev libegl-dev libgles-dev libstdc++-12-dev
+cat > "$work/armhf.ini" <<EOF
+[binaries]
+c = ['${cross}gcc', '--sysroot=$R']
+cpp = ['${cross}g++', '--sysroot=$R']
+ar = '${cross}ar'
+strip = '${cross}strip'
+pkg-config = 'pkg-config'
+
+[properties]
+sys_root = '$R'
+pkg_config_libdir = ['$R/usr/lib/arm-linux-gnueabihf/pkgconfig', '$R/usr/share/pkgconfig']
+needs_exe_wrapper = true
+
+[host_machine]
+system = 'linux'
+cpu_family = 'arm'
+cpu = 'armv7'
+endian = 'little'
+EOF
+
+mesa_archive="$work/mesa_22.3.6+sgx2.orig.tar.gz"
+mesa_src="$work/mesa-src"
+mesa_build="$work/mesa-build"
+rm -rf "$mesa_src" "$mesa_build" "$mesa_archive"
+timeout 180 wget --tries=3 --timeout=30 -O "$mesa_archive" \
+    https://maedevu.maemo.org/leste/pool/main/m/mesa/mesa_22.3.6+sgx2.orig.tar.gz
+echo 'f023f52de624ac3ed7162e3ea19d94e1b707457ff6b59dac1d0db8c74781e21f  '"$mesa_archive" | sha256sum -c -
+mkdir -p "$mesa_src"
+tar -xzf "$mesa_archive" -C "$mesa_src" --strip-components=1
+meson setup "$mesa_build" "$mesa_src" --cross-file "$work/armhf.ini" \
+    -Dgallium-drivers=sgx -Dgallium-sgx-alias=omapdrm \
+    -Dvulkan-drivers= -Ddri-drivers= -Dplatforms=null -Dglx=disabled \
+    -Degl=enabled -Dgbm=enabled -Dllvm=disabled -Dshared-glapi=enabled \
+    -Dgles1=disabled -Dgles2=enabled -Dosmesa=false -Dvalgrind=disabled \
+    -Dbuild-tests=false
+ninja -C "$mesa_build" src/gallium/targets/dri/omapdrm_dri.so
+install -m 644 "$mesa_build/src/gallium/targets/dri/omapdrm_dri.so" \
+    "$R/usr/lib/arm-linux-gnueabihf/dri/omapdrm_dri.so"
+
+# Daedalus' kmscube passes DRM_FORMAT_MOD_INVALID to omapdrm as a real modifier.
+kmscube_src="$work/kmscube-src"
+kmscube_build="$work/kmscube-build"
+kmscube_ref=f60e50e887d3c49e91ac9b06d8199b36152632fa
+rm -rf "$kmscube_src" "$kmscube_build"
+attempt=1
+while ! timeout 180 git clone https://gitlab.freedesktop.org/mesa/kmscube.git "$kmscube_src"; do
+    rm -rf "$kmscube_src"
+    [ "$attempt" -lt 3 ] || { echo "failed to clone kmscube after $attempt attempts" >&2; exit 1; }
+    attempt=$((attempt + 1))
+done
+git -C "$kmscube_src" checkout --detach "$kmscube_ref"
+meson setup "$kmscube_build" "$kmscube_src" \
+    --cross-file "$work/armhf.ini" -Dgstreamer=disabled
+ninja -C "$kmscube_build" kmscube
+install -m 755 "$kmscube_build/kmscube" "$R/usr/local/bin/kmscube"
+chroot "$R" apt-get -o APT::Sandbox::User=root -y purge \
+    libdrm-dev libgbm-dev libegl-dev libgles-dev libstdc++-12-dev
+
 cat > "$R/etc/init.d/powervr" <<'SYSV'
 #!/bin/sh
 ### BEGIN INIT INFO
@@ -118,6 +182,50 @@ esac
 SYSV
 chmod 755 "$R/etc/init.d/powervr"
 chroot "$R" update-rc.d powervr defaults
+chroot "$R" update-rc.d chrony defaults
+cat > "$R/etc/init.d/beagle-memory" <<'SYSV'
+#!/bin/sh
+### BEGIN INIT INFO
+# Provides:          beagle-memory
+# Required-Start:    $local_fs
+# Required-Stop:
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: Enable zram and optional USB storage
+### END INIT INFO
+
+case "${1:-}" in
+    start)
+        modprobe zram
+        if [ "$(cat /sys/block/zram0/disksize)" = 0 ]; then
+            echo $((64 * 1024 * 1024)) > /sys/block/zram0/disksize
+            mkswap -L zram0 /dev/zram0 >/dev/null
+        fi
+        swapon -p 100 /dev/zram0 2>/dev/null || true
+
+        mkdir -p /mnt/usb
+        usb_data=$(blkid -L beagle-usb 2>/dev/null || true)
+        usb_swap=$(blkid -L beagle-swap 2>/dev/null || true)
+        [ -z "$usb_data" ] || mountpoint -q /mnt/usb || mount "$usb_data" /mnt/usb
+        [ -z "$usb_swap" ] || swapon -p 10 "$usb_swap" 2>/dev/null || true
+        ;;
+    stop)
+        swapoff -L beagle-swap 2>/dev/null || true
+        swapoff /dev/zram0 2>/dev/null || true
+        umount /mnt/usb 2>/dev/null || true
+        ;;
+    restart|force-reload)
+        "$0" stop
+        "$0" start
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart|force-reload}" >&2
+        exit 1
+        ;;
+esac
+SYSV
+chmod 755 "$R/etc/init.d/beagle-memory"
+chroot "$R" update-rc.d beagle-memory defaults
 cleanup
 for mp in "$R/dev/pts" "$R/dev" "$R/sys" "$R/proc"; do
     if mountpoint -q "$mp"; then
@@ -138,6 +246,8 @@ echo "root:beagle" | chroot "$R" chpasswd
 sed -i 's/^#*PermitRootLogin.*/PermitRootLogin yes/' "$R/etc/ssh/sshd_config" 2>/dev/null || true
 echo beagle > "$R/etc/hostname"
 grep -q beagle "$R/etc/hosts" || echo "127.0.1.1 beagle" >> "$R/etc/hosts"
+grep -q '^makestep ' "$R/etc/chrony/chrony.conf" || echo 'makestep 1.0 3' >> "$R/etc/chrony/chrony.conf"
+grep -q '^rtcsync$' "$R/etc/chrony/chrony.conf" || echo 'rtcsync' >> "$R/etc/chrony/chrony.conf"
 [ -f "$R/etc/inittab" ] || echo "id:2:initdefault:" > "$R/etc/inittab"
 grep -q ttyS2 "$R/etc/inittab" || echo "T2:23:respawn:/sbin/agetty -L 115200 ttyS2 vt100" >> "$R/etc/inittab"
 grep -q ttyS1 "$R/etc/inittab" || echo "T1:23:respawn:/sbin/agetty -L 115200 ttyS1 vt100" >> "$R/etc/inittab"
@@ -146,15 +256,24 @@ grep -q "tty1" "$R/etc/inittab" || echo "1:2345:respawn:/sbin/agetty --noclear t
 cat > "$R/etc/network/interfaces" <<'NET'
 auto lo
 iface lo inet loopback
-allow-hotplug eth0
+auto eth0
 iface eth0 inet dhcp
 NET
 cat > "$R/etc/fstab" <<'FST'
 /dev/mmcblk0p2 / ext4 rw,noatime 0 1
 FST
+cat > "$R/etc/modules" <<'MODULES'
+omap_rng
+phy-twl4030-usb
+omap2430
+usb-storage
+usbhid
+asix
+r8152
+MODULES
 
 echo "=== GRAFT: mesa pvr override + gpu-test helper ==="
-echo 'export MESA_LOADER_DRIVER_OVERRIDE=pvr' > "$R/etc/profile.d/mesa-pvr.sh"
+rm -f "$R/etc/profile.d/mesa-pvr.sh"
 cat > "$R/root/gpu-test.sh" <<'GPU'
 #!/bin/sh
 # Quick SGX530 sanity check: init services, then a surfaceless GLES render probe.

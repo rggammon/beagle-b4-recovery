@@ -267,10 +267,12 @@ lives in its own image:
   _exactly_ this combination while any other genuine mismatch still fails.
 - **Verified on hardware:** a surfaceless GLES2 render reports
   `GL_RENDERER = "PowerVR SGX 530"` with correct pixel read-back (`tools/sgx-render-test.c`
-  is a self-contained `dlopen` EGL/GLES2 probe — no headers or network needed). Offscreen
-  rendering works today; the on-screen/KMS display path (`omapdrm` + PRIME) is still a
-  work in progress. The BTT HDMI7 mode failure, reduced-blanking solution, and validation
-  sequence are tracked in [docs/btt-hdmi7-omapdrm.md](docs/btt-hdmi7-omapdrm.md).
+  is a self-contained `dlopen` EGL/GLES2 probe — no headers or network needed).
+  Hardware-rendered `kmscube` output is also visible on the BTT HDMI7 through OMAP DRM.
+  The working image reserves `cma=48M`, adds Mesa's missing `omapdrm` SGX alias, and builds
+  a pinned newer `kmscube` with correct invalid-modifier fallback. Continuous rendering is stable;
+  process teardown can still trigger recoverable SGX watchdog resets. Details and measured
+  performance are in [docs/btt-hdmi7-omapdrm.md](docs/btt-hdmi7-omapdrm.md).
 
 Related community efforts this builds on / references:
 

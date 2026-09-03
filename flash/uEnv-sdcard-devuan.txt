@@ -6,4 +6,4 @@
 # 64-pixel limit; the non-reduced CVT mode used 104 pixels and was rejected as MODE_BAD.
 # force-enables the connector: the BTT HDMI7 (7" 1024x600) hands back no usable EDID over
 # this board's DVI DDC, so omapdrm otherwise reports it disconnected. 'e' = force enabled.
-bootargs=console=ttyS2,115200n8 root=/dev/mmcblk0p2 rootfstype=ext4 rw rootwait net.ifnames=0 video=DVI-D-1:1024x600MR@60e
+bootargs=console=ttyS2,115200n8 root=/dev/mmcblk0p2 rootfstype=ext4 rw rootwait net.ifnames=0 cma=48M video=DVI-D-1:1024x600MR@60e
