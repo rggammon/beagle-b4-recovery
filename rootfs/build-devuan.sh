@@ -93,7 +93,8 @@ rm -f "$R/usr/sbin/rc-update"
 # that alias from the exact Maemo-Leste source, then build a newer kmscube whose
 # framebuffer path handles DRM_FORMAT_MOD_INVALID correctly.
 chroot "$R" apt-get -o APT::Sandbox::User=root -y --no-install-recommends install \
-    libdrm-dev libgbm-dev libegl-dev libgles-dev libstdc++-12-dev
+    libdrm-dev libgbm-dev libegl-dev libgles-dev libstdc++-12-dev \
+    zlib1g-dev libexpat1-dev
 cat > "$work/armhf.ini" <<EOF
 [binaries]
 c = ['${cross}gcc', '--sysroot=$R']
@@ -123,6 +124,12 @@ timeout 180 wget --tries=3 --timeout=30 -O "$mesa_archive" \
 echo 'f023f52de624ac3ed7162e3ea19d94e1b707457ff6b59dac1d0db8c74781e21f  '"$mesa_archive" | sha256sum -c -
 mkdir -p "$mesa_src"
 tar -xzf "$mesa_archive" -C "$mesa_src" --strip-components=1
+cp "$here/../tools/mesa-bookworm-compat.c" \
+    "$mesa_src/src/gallium/targets/dri/mesa-bookworm-compat.c"
+sed -i "s/files('target.c'),/files('target.c', 'mesa-bookworm-compat.c'),/" \
+    "$mesa_src/src/gallium/targets/dri/meson.build"
+grep -q "files('target.c', 'mesa-bookworm-compat.c')" \
+    "$mesa_src/src/gallium/targets/dri/meson.build"
 meson setup "$mesa_build" "$mesa_src" --cross-file "$work/armhf.ini" \
     -Dgallium-drivers=sgx -Dgallium-sgx-alias=omapdrm \
     -Dvulkan-drivers= -Ddri-drivers= -Dplatforms=null -Dglx=disabled \
@@ -150,7 +157,8 @@ meson setup "$kmscube_build" "$kmscube_src" \
 ninja -C "$kmscube_build" kmscube
 install -m 755 "$kmscube_build/kmscube" "$R/usr/local/bin/kmscube"
 chroot "$R" apt-get -o APT::Sandbox::User=root -y purge \
-    libdrm-dev libgbm-dev libegl-dev libgles-dev libstdc++-12-dev
+    libdrm-dev libgbm-dev libegl-dev libgles-dev libstdc++-12-dev \
+    zlib1g-dev libexpat1-dev
 
 cat > "$R/etc/init.d/powervr" <<'SYSV'
 #!/bin/sh
