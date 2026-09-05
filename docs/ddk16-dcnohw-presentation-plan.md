@@ -1,0 +1,459 @@
+# OMAP3 SGX103 DDK 1.6 Presentation Plan
+
+## Goal
+
+Present a rotating GLES2 cube and then an OpenGL game such as OpenQuartz on
+OMAP3 SGX530 revision 1.0.3 hardware using TI DDK `1.6.16.3977` on Linux 7.2.
+
+The presentation boundary is the open-source `dc_nohw` DisplayClass provider:
+
+```text
+DDK 1.6 EGL window surface
+  -> dc_nohw swapchain buffer
+  -> DMA-BUF export
+  -> renderer/presenter protocol
+  -> omapdrm GEM import
+  -> KMS page flip
+```
+
+DDK 1.6 and `dc_nohw` own the render buffers. A separate open presenter owns
+KMS state and scanout. The implementation must not port `omaplfb`, inspect
+proprietary EGL objects, or decode SGX command streams.
+
+Historical recovery, DDK comparisons, and rejected alternatives are in
+[SGX103 DDK recovery history](sgx103-ddk-recovery-history.md). Linux 7.2 API
+changes and the DDK build-option audit are in
+[DDK 1.6 Linux 7.2 port notes](ddk16-linux72-port-notes.md). The existing B4
+KMS/display investigation is in [BTT HDMI7 and OMAP DRM notes](btt-hdmi7-omapdrm.md).
+
+## Current Status
+
+**Active stage:** extended Stage 0 validation; Stage 1 is blocked.
+
+**Original Stage 0 baseline:** passed for DDK 1.6 and, independently, DDK 1.4.
+
+| Stack                      | Target 0 median | Target 1 median | Frames over 500 ms |
+| -------------------------- | --------------: | --------------: | -----------------: |
+| DDK `1.4.14.2616`, SGX103  |        0.205 ms |        0.205 ms |           0 of 112 |
+| DDK `1.6.16.3977`, SGX103  |        0.204 ms |        0.204 ms |           0 of 112 |
+| DDK `1.17.4948957`, SGX121 |         1.46 ms |       808.27 ms |          56 of 112 |
+
+DDK 1.6 is the primary implementation target because it is the newest known TI
+release with a complete SGX103 payload and matches DDK 1.4 performance. DDK 1.4
+remains the rollback baseline. Neither stack has yet passed Stage 1: the pbuffer
+benchmark required `dc_nohw` registration but did not create an EGL window
+surface or exercise a DisplayClass swapchain.
+
+The stricter pre-Stage-1 guard added afterward completed five clean lifecycle
+cycles. Its first multi-process soak attempt failed during the second
+50,000-frame process: three hardware recoveries occurred, one with BIF fault
+address `0x0F0AB000`, and two frames exceeded 500 ms. A subsequent single EGL
+process rendered for the full 180 seconds and 99,050 frames, but two frames
+still exceeded 500 ms and a recovery began during teardown, about 0.34 seconds
+after the probe wrote its summary. Module exit then remained stuck with a `-1`
+module-use display, meaning the module was in its unloading state rather than
+having a negative reference count. The board remained responsive over SSH;
+only module unload was deadlocked.
+
+Kernel commit `e2b9d0eea` fixes that deadlock by allowing `ISR_ID` workqueue
+callers to use the existing nonblocking Services resource lock without first
+waiting on the custom OMAP power mutex. The post-fix five-cycle plus 180-second
+run exited and unloaded both modules cleanly. It still triggered two hardware
+recoveries during teardown and reported two frames over 500 ms across 97,768
+frames, with a 1.134-second maximum. Stage 1 remains blocked on the recovery
+and latency failures, not on module unload.
+
+## Handoff Card
+
+### Systems
+
+- Development host: `geoduck-tools-ryan`
+- B4 target: `root@192.168.50.245`
+- SSH key: `~/.ssh/geoduck_truenas`
+- Hardware: BeagleBoard Rev B4, OMAP3530 ES2.1, SGX530 SGX103, 128 MB RAM
+- Running kernel: `7.2.0-g2342ce92fdde-dirty`
+- Required vermagic:
+  `7.2.0-g2342ce92fdde-dirty SMP mod_unload modversions ARMv6 p2v8`
+
+### Maintained Source
+
+- Kernel tree: `/mnt/scratch/geoduck-tmp/beagle/openpvrsgx-src`
+- DDK 1.6 worktree: `/mnt/scratch/geoduck-tmp/beagle/openpvrsgx-ddk16`
+- Branch: `users/rgammon/pvrsgx-1.6.16.3977`
+- DDK source: `drivers/gpu/drm/pvrsgx/1.6.16.3977`
+- `dc_nohw`: `services4/3rdparty/dc_nohw`
+
+Reviewable baseline commits:
+
+- `91f00a69f`: Linux 7.2 Services port.
+- `9858b321a`: DDK 1.8-derived `dc_nohw` provider and build integration.
+
+The worktree is clean at the Stage 0 checkpoint. Do not edit generated or
+staged copies as canonical source.
+
+### Target Runtime
+
+The runtime came directly from TI Graphics SDK `4.03.00.02`; it is not a
+Pandora build. The initial development staging name has been corrected:
+
+- Release runtime: `/opt/ti-ddk16/runtime`
+- Legacy init libc bundle: `/opt/ti-ddk16/lib`
+- Test binaries and modern armel libc: `/opt/pandora-armel`
+- Modules: `/opt/ti-ddk16/module/pvrsrvkm.ko` and `dcnohw.ko`
+
+Use only `gfx_rel_es2.x` for acceptance testing. The TI debug userspace has a
+different debug build-option mask and is diagnostic-only.
+
+### Integrated Build
+
+```sh
+make -C /mnt/scratch/geoduck-tmp/beagle/openpvrsgx-ddk16 \
+  ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- \
+  LOCALVERSION=-g2342ce92fdde-dirty \
+  M=drivers/gpu/drm/pvrsgx \
+  CONFIG_SGX=m CONFIG_SGX_OMAP=m \
+  CONFIG_PVRSGX_1_6_16_3977=y \
+  CONFIG_PVRSGX_1_6_16_3977_DC_NOHW=m \
+  modules
+```
+
+## Architecture
+
+### DisplayClass Boundary
+
+The closed DDK 1.6 EGL/WSEGL stack expects a Services DisplayClass device. The
+adapted DDK 1.8 `dc_nohw` provider satisfies that contract and owns a bounded
+set of known linear buffers. It allocates a system buffer and up to three
+swapchain back buffers, associates Services sync data with each buffer, receives
+swap commands, and reports command completion.
+
+The useful open boundary is `DC_NOHW_BUFFER`, not an arbitrary EGL texture or
+FBO. Every buffer selected for an EGL window surface is therefore identifiable
+without knowledge of proprietary EGL layouts.
+
+### Ownership Invariant
+
+A backing allocation must remain valid while any of these references exists:
+
+```text
+dc_nohw swapchain buffer
+  <- PowerVR Services reference
+  <- DMA-BUF exporter reference
+  <- presenter GEM/framebuffer reference
+  <- active KMS plane reference
+```
+
+Shutdown order is the reverse:
+
+1. Disable or replace the active KMS plane.
+2. Destroy framebuffer and imported GEM references.
+3. Close DMA-BUF FDs and attachments.
+4. Destroy the DisplayClass swapchain.
+5. Unload `dc_nohw`, then Services.
+
+### Buffer State
+
+The protocol must enforce:
+
+```text
+FREE -> RENDERING -> READY -> QUEUED -> SCANNING -> FREE
+```
+
+`pfnPVRSRVCmdComplete` means the DisplayClass command has completed and the
+buffer may be reused according to the protocol. It must be called exactly once
+per accepted command, including controlled shutdown and error paths.
+
+## Stage 0: Stable Rendering Baseline
+
+**Status: short baseline passed; extended gate pending.** The release DDK
+initializes, `dc_nohw` registers, and the 120-frame alternating-FBO test
+completes without stalls or recovery. The extended soak exposed the recovery
+described above, so the following operating requirements must pass before
+opening Stage 1 changes.
+
+### Preserve Reviewable Checkpoints
+
+- Keep the completed Services and `dc_nohw` baseline commits separate.
+- Begin every stage from a clean tree and keep its implementation,
+  instrumentation, and tests in reviewable commits with one stated purpose.
+- Keep temporary diagnostics out of final commits. If a diagnostic must remain,
+  make it opt-in and commit it separately from behavioral changes.
+- Do not combine Stage 1 instrumentation with Stage 2 export or later presenter
+  work.
+- Record module hashes and vermagic with each hardware result.
+- Do not include generated `.o`, `.ko`, `.cmd`, `Module.symvers`, or staging
+  files in source commits unless repository policy explicitly requires them.
+- Before advancing a stage, require a clean diff, successful focused build,
+  Stage 0 regression result, and a commit that can be reviewed or reverted
+  without taking unrelated work with it.
+
+### Release-Runtime Discipline
+
+- Use only TI `gfx_rel_es2.x` for acceptance tests.
+- Keep its `pvrsrvinit`, `libsrv_init.so`, `libsrv_um.so`, EGL/GLES libraries,
+  and SGX103 uKernel together.
+- Use the isolated legacy libc only for `pvrsrvinit`.
+- Use the modern armel loader/libc for locally compiled probes while putting
+  DDK 1.6 libraries first in the graphics-library search path.
+- Do not treat the debug userspace's build-option mismatch as a release defect.
+
+### Lifecycle and Soak Guard
+
+Before and after each later stage:
+
+1. Perform at least five clean cycles of load Services, run `pvrsrvinit`, load
+   `dc_nohw`, run the probe, unload `dc_nohw`, and unload Services.
+2. Run one alternating-FBO process continuously for at least three minutes.
+3. Record memory before and after the cycles to detect leaked pages or handles.
+4. Confirm IRQ 21 remains registered as `SGX ISR` while initialized.
+5. Reject any BIF fault, `HWRecoveryResetSGX`, watchdog recovery, Oops, BUG,
+   build-option mismatch, or process hang.
+
+### Stage 1 Test Contract
+
+Create a dedicated window-surface probe rather than overloading the pbuffer
+benchmark. The probe must:
+
+- Use only documented EGL and open WSEGL/PVR2D interfaces.
+- Create a native window token in the form expected by the open WSEGL sample
+  interface; derive it from open source or SDK samples, not proprietary EGL
+  memory.
+- Request two 1024x600 32-bit window buffers initially.
+- Render an unmistakably changing color or simple rotating cube.
+- Call `eglSwapBuffers` repeatedly and close cleanly.
+- Remain separate from DMA-BUF export and KMS presentation.
+
+### Instrumentation Contract
+
+Stage 1 instrumentation must be opt-in, bounded, and removable. Record:
+
+- Swapchain creation/destruction count and requested buffer count.
+- Buffer index plus open CPU/system address identity.
+- Associated `PVRSRV_SYNC_DATA` identity.
+- Swap command sequence and buffer index.
+- Command-completion sequence and status.
+
+Instrument `CreateDCSwapChain`, `GetDCBuffers`, `SwapToDCBuffer`,
+`DestroyDCSwapChain`, and the open command-completion call site. Prefer trace
+points or debugfs counters. Do not add unbounded per-frame kernel logs, restore
+legacy procfs diagnostics, or inspect proprietary objects.
+
+### Stage 0 Acceptance
+
+- Release `pvrsrvinit` exits zero.
+- `dcnohw.ko` registers successfully.
+- Alternating-FBO medians remain comparable between both targets.
+- No frame exceeds 500 ms.
+- Lifecycle and soak checks show no leak or recovery.
+- Clean source checkpoints exist before Stage 1 instrumentation begins.
+
+## Stage 1: Headless EGL Window Surface
+
+**Status: next.** Prove that a real DDK 1.6 EGL window surface uses the known
+`dc_nohw` swapchain buffers and completes swaps correctly without presentation.
+
+### Implementation
+
+- Add the bounded instrumentation defined by Stage 0.
+- Add a dedicated GLES2 window-surface test program.
+- Create two swapchain buffers at 1024x600x32.
+- Render a changing pattern or rotating cube and call `eglSwapBuffers`.
+- Run repeated create/render/destroy cycles.
+
+### Pass Criteria
+
+- EGL creates a window surface and a two-buffer DisplayClass swapchain.
+- `GetDCBuffers` exposes only the bounded known `DC_NOHW_BUFFER` set.
+- `SwapToDCBuffer` alternates through that set with monotonic sequences.
+- Every accepted swap command is completed exactly once.
+- The renderer runs for at least 60 seconds and exits cleanly repeatedly.
+- No memory growth, recovery, fault, Oops, BUG, or pbuffer regression occurs.
+
+### Failure Boundary
+
+Do not begin DMA-BUF work if Stage 1 requires proprietary EGL inspection,
+produces ambiguous buffer identity, or cannot establish exact command
+completion. Resolve the open DisplayClass behavior first.
+
+## Stage 2: DMA-BUF Export
+
+Export a known `DC_NOHW_BUFFER` through a narrow open control interface.
+
+### Initial UAPI
+
+Use a small `miscdevice` with fixed-width ioctls rather than extending the
+proprietary Services bridge. Initial operations should cover:
+
+- Query ABI version and current swapchain geometry.
+- Enumerate stable session-local buffer indices.
+- Export `EXPORT_BUFFER(index)` as a DMA-BUF FD.
+- Query read-only buffer state and sequence counters.
+
+Debugfs may expose diagnostics but is not the FD-export API.
+
+### Kernel Work
+
+- Add exporter state and reference counting per buffer.
+- Build an `sg_table` from the pages backing the discontiguous vmalloc buffer.
+- Implement attach, detach, map, unmap, begin/end CPU access, mmap if needed,
+  and release for the current kernel's `dma_buf_ops`.
+- Publish format, dimensions, stride, and allocation size explicitly.
+- Keep the backing allocation alive until Services, all DMA-BUFs, attachments,
+  framebuffers, and scanout references are gone.
+- Define module-unload behavior and reject unload while exports remain.
+
+### Pass Criteria
+
+- Every swapchain buffer can be exported repeatedly by index.
+- Attachment map/unmap cycles succeed without leaks.
+- Closing the renderer does not invalidate an intentionally retained export.
+- Closing the final export releases its reference exactly once.
+- Invalid indices, stale sessions, process death, and partial failures clean up
+  deterministically.
+
+## Stage 3: KMS Import and CPU-Pattern Scanout
+
+Build a hard-float presenter that receives DMA-BUF FDs over
+`SOCK_SEQPACKET`/`SCM_RIGHTS`, imports them into `omapdrm`, creates DRM
+framebuffers, and owns all atomic KMS state.
+
+Begin with CPU-generated color bars, not SGX rendering. This isolates DMA-BUF
+layout, cache transitions, GEM import, format, stride, mode setting, and page
+flip behavior.
+
+### Pass Criteria
+
+- `drmPrimeFDToHandle` imports every buffer.
+- The chosen DRM format and stride display correct color bars.
+- Double-buffer atomic flips run at the expected display cadence.
+- Renderer and presenter can exit independently without stale scanout or leaked
+  attachments.
+- No kernel warning, use-after-free, or display corruption occurs.
+
+## Stage 4: Synchronous GLES Presentation
+
+Connect the Stage 1 window renderer to the Stage 3 presenter using the exported
+swapchain buffers. Use explicit ready/free protocol messages and conservative
+Services completion before notifying the presenter.
+
+The fixed-width protocol must include ABI version, session ID, buffer index,
+frame sequence, dimensions, stride, DRM format, and message type. Reject stale
+sessions and non-monotonic sequences.
+
+### Pass Criteria
+
+- The rendered changing pattern or cube appears on the B4 display.
+- No buffer enters `RENDERING` while it is `QUEUED` or `SCANNING`.
+- `pfnPVRSRVCmdComplete` is issued only when the buffer is reusable.
+- At least 60 seconds of presentation completes without recovery or corruption.
+- SGX completion latency and KMS commit/flip latency are recorded separately.
+
+## Stage 5: Explicit Linux Fences
+
+Replace the conservative synchronous wait with a fence derived from the
+buffer's Services write counters.
+
+For serial $N$, signal completion only when
+$\text{WriteOpsComplete} \geq N$. The fence must be advanced from the Services
+completion path after firmware status is processed, not merely when an SGX
+interrupt occurs. Recovery and teardown must signal outstanding fences with an
+error.
+
+Export the fence as a sync-file FD and use the target plane's explicit input
+fence property when available. Fence completion does not replace DMA cache
+ownership transitions or the buffer state protocol.
+
+### Pass Criteria
+
+- The presenter can queue before SGX completion.
+- Scanout waits until the corresponding fence signals.
+- Scheduling jitter does not cause tearing or premature buffer reuse.
+- Recovery and shutdown resolve every outstanding fence.
+
+## Stage 6: Implicit Synchronization
+
+Attach the SGX completion fence to the exported DMA-BUF's `dma_resv` as its
+write fence. Let a compatible display-driver import path wait through normal
+framebuffer preparation.
+
+### Pass Criteria
+
+- The renderer/presenter protocol no longer transports a fence FD.
+- DMA-fence tracing shows `omapdrm` waiting on the PowerVR fence.
+- Explicit-fence and synchronous modes remain available as diagnostic controls.
+- Buffer reuse and teardown remain correct under process failure and recovery.
+
+## Stage 7: Application Validation
+
+Move from the synthetic cube to OpenQuartz or another appropriate OpenGL game.
+Keep the same EGL window, swapchain, export, and presenter path.
+
+### Pass Criteria
+
+- The application runs continuously for at least 30 minutes.
+- Input, resize policy, shutdown, and restart behave predictably.
+- Frame pacing, SGX completion, KMS latency, memory use, and dropped frames are
+  recorded.
+- No fallback to software rendering occurs.
+
+## Stage 8: Packaging and Portability
+
+Integrate the validated stack into the Devuan image and retain platform-neutral
+renderer/export protocol boundaries.
+
+### Deliverables
+
+- Reproducible kernel patches and configuration.
+- Version-matched DDK 1.6 SGX103 runtime staging.
+- `dc_nohw`, exporter UAPI documentation, presenter, and test programs.
+- Automated Stage 0 smoke test and longer soak test.
+- B4 KMS configuration and a separate Pandora display-validation checklist.
+- Recovery instructions that preserve the existing DDK 1.4 fallback.
+
+## Engineering Rules
+
+1. Work in the DDK 1.6 OpenPVRSGX worktree, not generated bundles.
+2. Keep SGX103-only configuration and version matching strict.
+3. Make each stage a separate reviewable patch series. Checkpoint proven
+   behavior before adding the next stage, and never mix temporary diagnostics
+   with the permanent implementation.
+4. Run the Stage 0 probe after every kernel-side change.
+5. Keep instrumentation bounded and removable.
+6. Do not port `omaplfb` or revive obsolete procfs diagnostics.
+7. Do not inspect proprietary EGL/GLES structures or command streams.
+8. Keep soft-float rendering and hard-float presentation separated by documented
+   IPC and DMA-BUF interfaces.
+9. Treat cache management, synchronization, ownership, and lifetime as separate
+   correctness requirements.
+10. Reject unrelated refactors while the staged validation path is incomplete.
+
+## Immediate Next Actions
+
+1. Add a repeatable DDK 1.6 Stage 0 test script and run the lifecycle/soak guard.
+2. Locate the open WSEGL native-window contract in SDK samples or open headers.
+3. Implement the dedicated Stage 1 window-surface probe.
+4. Add bounded `dc_nohw` swapchain instrumentation in a separate commit.
+5. Run Stage 1 on the B4 and preserve logs and timing output.
+6. Checkpoint the passing Stage 1 implementation before beginning DMA-BUF work.
+
+## Explicit Non-Goals
+
+- Supporting SGX121 firmware on SGX103 hardware.
+- Porting legacy `omaplfb`, fbdev, OMAP DSS, or VRFB internals.
+- Reverse engineering proprietary EGL, GLES, firmware, or command buffers.
+- Exporting arbitrary proprietary allocations.
+- Combining the soft-float renderer with the hard-float presenter in one
+  process.
+
+## Acronyms
+
+- **DisplayClass**: PowerVR Services display-provider interface.
+- **DMA-BUF**: Linux shared-buffer framework.
+- **DMA reservation (`dma_resv`)**: fence container associated with a shared
+  buffer.
+- **DRM/KMS**: Linux graphics memory sharing and display mode-setting APIs.
+- **FBO**: OpenGL framebuffer object.
+- **GEM**: DRM graphics memory manager/object model.
+- **SGX103**: SGX530 core revision 1.0.3.
+- **UMD**: user-mode driver.
+- **WSEGL**: PowerVR window-system EGL integration layer.
