@@ -140,15 +140,18 @@ SGX fixes needed by each image.
   re-cycles it. This is the counterpart to the USB flakiness the C70 note warns about.
 - **`0005-sgx-fck-core-clock-110mhz.patch`** — `omap3-beagle-ab4.dts`: reparent the SGX
   functional-clock mux (`sgx_mux_fck`, `CM_CLKSEL_SGX`) to `core_d3_ck` so `sgx_fck` runs
-  at **110.67 MHz** (core/3). Mainline leaves it on `core_d6_ck` (core/6 = 55 MHz), half
-  the rate the TI vendor kernel used; at half clock, borderline GPU renders overrun the
-  DDK's fixed 100 ms `EVENT_OBJECT` wait and stall. Inert on the recovery image (no SGX
-  userspace), but keeps the shared `ab4` DTB correct for the GPU image. Verify with
-  `sgx_fck = 110666666` in `/sys/kernel/debug/clk/clk_summary`.
+  at **110.67 MHz** (core/3) instead of mainline's `core_d6_ck` (core/6 = 55 MHz). **Note:
+  this is cosmetic, not the stall fix** — the DDK 1.6 module's `EnableSGXClocks` already
+  reparents the composite mux to 110.67 MHz on load, so the clock reaches vendor speed with
+  or without this patch. It was initially suspected as the cause of the residual
+  `EVENT_OBJECT_WAIT` stall; that turned out to be the SGX IRQ mapping (see the devuan
+  `0008` patch). Inert on the recovery image (no SGX userspace) and does not apply at boot
+  anyway (the provider-node `assigned-clock-parents` never fires). Kept only so the shared
+  `ab4` DTB documents the intended parent.
 
 ### Devuan GPU kernel (against OpenPVRSGX Linux 7.2) — `kernel/patches-devuan/`
 
-`kernel/build-devuan.sh` applies these seven patches to the fork's DDK 1.6 branch
+`kernel/build-devuan.sh` applies these eight patches to the fork's DDK 1.6 branch
 (`rggammon/linux_openpvrsgx`, `users/rgammon/pvrsgx-1.6.16.3977`) and builds
 `CONFIG_PVRSGX_1_6_16_3977` + `dc_nohw` (the Phase 0 stack from the presentation plan).
 The AB4 timer correction is still supplied by building
@@ -185,9 +188,20 @@ The AB4 timer correction is still supplied by building
 - **`0007-sgx-fck-core-clock-110mhz.patch`** — the same `omap3-beagle-ab4.dts` SGX
   functional-clock fix as the recovery kernel's `0005`: reparent `sgx_mux_fck` to
   `core_d3_ck` for `sgx_fck` = 110.67 MHz (core/3) instead of mainline's 55 MHz (core/6).
-  This is the fix for the residual `EVENT_OBJECT_WAIT` stalls — at half clock, renders
-  take ~2x and cross the DDK's 100 ms wait timeout. Confirmed against the native Angstrom
-  vendor kernel, which runs `sgx_fck` at 110.67 MHz.
+  **Cosmetic — not the stall fix.** The DDK 1.6 module self-sets `sgx_fck` to 110.67 MHz
+  on load (its `EnableSGXClocks` reparents the composite mux), so the GPU already ran at
+  full clock during the original soak; the clock was a red herring. This patch is inert at
+  boot (the provider-node `assigned-clock-parents` never fires) and is kept only for DTB
+  documentation. The actual stall fix is `0008`.
+- **`0008-pvrsgx-sgx-irq-37.patch`** — the real fix for the residual `EVENT_OBJECT_WAIT`
+  stall. The DDK's `SYS_OMAP3430_SGX_IRQ` requested raw IRQ **21**, which on the DT 7.2
+  kernel is *virq* 21 = **hwirq 5** — the wrong INTC line. `/proc/interrupts` showed
+  `21: 0 INTC 5 Edge SGX ISR` with the count stuck at **0**: the SGX render-complete
+  interrupt was never delivered, so every `PVRSRVEventObjectWait` fell through to its poll
+  timeout and rendering hung on the first frame. The `omap-intc` linear `irq_domain`
+  allocates virqs from 16, so SGX hwirq 21 maps to **virq 37**. Requesting 37 lands the
+  ISR on the correct line; the count then climbs with rendering and the serialized
+  render/flip soak runs to completion with no timeout flood.
 
 #### MMC patch evidence
 
