@@ -41,6 +41,7 @@
 #define WIDTH 1024
 #define HEIGHT 600
 #define ITERATIONS 120
+#define SLOW_CALL_NS 100000000ULL
 
 typedef void *EGLDisplay;
 typedef void *EGLContext;
@@ -73,14 +74,36 @@ static void *symbol(void *library, const char *name)
     return address;
 }
 
-static uint64_t monotonic_ns(void)
+static uint64_t clock_ns(clockid_t clock_id)
 {
     struct timespec ts;
 
-    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0)
+    if (clock_gettime(clock_id, &ts) != 0)
         fail("clock_gettime");
 
     return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
+}
+
+static uint64_t monotonic_ns(void)
+{
+    return clock_ns(CLOCK_MONOTONIC);
+}
+
+static void report_slow_call(int frame, const char *phase,
+                             uint64_t wall_start_ns, uint64_t wall_end_ns,
+                             uint64_t cpu_start_ns, uint64_t cpu_end_ns)
+{
+    uint64_t wall_ns = wall_end_ns - wall_start_ns;
+
+    if (wall_ns < SLOW_CALL_NS)
+        return;
+
+    fprintf(stderr,
+            "slow frame=%d phase=%s wall_us=%llu cpu_us=%llu\n",
+            frame, phase,
+            (unsigned long long)(wall_ns / 1000ULL),
+            (unsigned long long)((cpu_end_ns - cpu_start_ns) / 1000ULL));
+    fflush(stderr);
 }
 
 int main(int argc, char **argv)
@@ -89,6 +112,8 @@ int main(int argc, char **argv)
     const int alternate = argc <= 2 || atoi(argv[2]) != 0;
     const int use_fbo = argc <= 3 || atoi(argv[3]) != 0;
     const int use_texture = argc <= 4 || atoi(argv[4]) != 0;
+    const int rebind_attachment = getenv("SGX_REBIND_ATTACHMENT") == NULL ||
+                                  atoi(getenv("SGX_REBIND_ATTACHMENT")) != 0;
     const int duration_seconds = getenv("SGX_DURATION_SECONDS") != NULL ?
                                  atoi(getenv("SGX_DURATION_SECONDS")) : 0;
     const int summary_only = getenv("SGX_SUMMARY_ONLY") != NULL &&
@@ -298,9 +323,9 @@ int main(int argc, char **argv)
         }
     }
 
-    printf("egl=%d.%d renderer=%s dimensions=%dx%d iterations=%d duration_seconds=%d alternate=%d fbo=%d texture=%d\n",
+        printf("egl=%d.%d renderer=%s dimensions=%dx%d iterations=%d duration_seconds=%d alternate=%d fbo=%d texture=%d rebind_attachment=%d\n",
            major, minor, glGetString(GL_RENDERER), WIDTH, HEIGHT, iterations,
-           duration_seconds, alternate, use_fbo, use_texture);
+            duration_seconds, alternate, use_fbo, use_texture, rebind_attachment);
     if (!summary_only)
         puts("frame,buffer,select_us,finish_us,total_us");
 
@@ -313,11 +338,16 @@ int main(int argc, char **argv)
         uint64_t start_ns = monotonic_ns();
         uint64_t bound_ns;
         uint64_t finished_ns;
+        uint64_t select_cpu_start_ns;
+        uint64_t select_cpu_end_ns;
+        uint64_t finish_cpu_start_ns;
+        uint64_t finish_cpu_end_ns;
         uint64_t select_ns;
         uint64_t finish_ns;
         uint64_t frame_ns;
 
-        if (use_fbo) {
+        select_cpu_start_ns = clock_ns(CLOCK_PROCESS_CPUTIME_ID);
+        if (use_fbo && (rebind_attachment || frame == 0)) {
             if (use_texture)
                 glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
                                        GL_TEXTURE_2D, textures[index], 0);
@@ -328,10 +358,18 @@ int main(int argc, char **argv)
             fail("eglMakeCurrent");
         }
         bound_ns = monotonic_ns();
+        select_cpu_end_ns = clock_ns(CLOCK_PROCESS_CPUTIME_ID);
+        report_slow_call(frame, use_fbo ? "attachment" : "make-current",
+                         start_ns, bound_ns,
+                         select_cpu_start_ns, select_cpu_end_ns);
+        finish_cpu_start_ns = clock_ns(CLOCK_PROCESS_CPUTIME_ID);
         glClearColor(index ? 0.125f : 0.5f, 0.25f, 0.5f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
         glFinish();
         finished_ns = monotonic_ns();
+        finish_cpu_end_ns = clock_ns(CLOCK_PROCESS_CPUTIME_ID);
+        report_slow_call(frame, "clear-finish", bound_ns, finished_ns,
+                         finish_cpu_start_ns, finish_cpu_end_ns);
 
         select_ns = bound_ns - start_ns;
         finish_ns = finished_ns - bound_ns;

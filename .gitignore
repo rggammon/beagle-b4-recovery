@@ -2,7 +2,21 @@
 /build/
 /build-devuan/
 /out/
+/dist/
+
+# Disk images (regenerable from CI)
+*.img
+*.img.xz
+*.img.gz
 
 # Logs and scratch
 *.log
 *.bak
+
+# Local investigation scratch (not part of the source tree)
+/angstrom-test/
+/angstrom-transfer/
+/pvr_bridge_k.ring.c
+/pvr_bridge_k.ring2.c
+/pvr_bridge_k.trace.c
+/sysconfig.h.irqtest

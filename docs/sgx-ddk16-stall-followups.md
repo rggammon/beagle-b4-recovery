@@ -9,6 +9,7 @@ count stuck at 0) and every `PVRSRVEventObjectWait` timed out. Fixed by
 `sgx_fck` to 110.67 MHz on load.
 
 ## Status (2026-09-06)
+
 - **Residual `EVENT_OBJECT_WAIT` stall: RESOLVED** by
   [0008-pvrsgx-sgx-irq-37.patch](../kernel/patches-devuan/0008-pvrsgx-sgx-irq-37.patch).
   Verified on hardware: `37: … INTC 21 SGX ISR` fires every frame; 500-frame serialized soak
@@ -27,6 +28,7 @@ under `drivers/gpu/drm/pvrsgx/1.6.16.3977/`.
 ---
 
 ## 1. APM at 1 ms + `ti-sysc` idle ownership — RESOLVED (0009)
+
 **What:** `SYS_SGX_ACTIVE_POWER_LATENCY_MS = 1` (`services4/system/omap3/sysconfig.h:44`) made
 the DDK power-cycle the SGX domain on essentially every serialized frame. Each transition takes
 `PVRSRVPowerLock` — a test-and-set spun with a fixed ~1 s timeout (`services4/srvkm/common/power.c`).
@@ -45,6 +47,7 @@ If power-lock issues ever recur on idle→resume, add `ti,no-idle;` to `&sgx_mod
 `SUPPORT_ACTIVE_POWER_MANAGEMENT` to eliminate transitions entirely.
 
 ## 2. MISR on a normal-priority single-threaded workqueue — NOT DOING (no measured need)
+
 **What:** the build selects `PVR_LINUX_MISR_USING_PRIVATE_WORKQUEUE` (`Makefile:348`): hard IRQ
 (LISR) → `queue_work(pvr_workqueue, …)` → the global event object is signalled from a
 normal-priority, single-threaded workqueue (`create_singlethread_workqueue`, `osfunc.c:760`), i.e.
@@ -58,19 +61,21 @@ alternative runs in softirq/atomic context — real risk (no sleeping; can hurt 
 measured gain.
 
 **Reconsider if:** a latency-sensitive workload (e.g. 60 fps interactive/compositing UI) shows
-*visible* jitter that never trips the 100 ms watchdog. Then first capture per-frame **max/p99**
+_visible_ jitter that never trips the 100 ms watchdog. Then first capture per-frame **max/p99**
 timing to prove MISR jitter is the bottleneck, and try the lighter `WQ_HIGHPRI` (stays in process
 context) before the tasklet.
 
 ## 3. Interrupt trigger type (Edge vs Level) — NON-ISSUE (handled as level; "Edge" is cosmetic)
+
 **Investigated for correctness** (not just "seems fine"). `/proc/interrupts` labels the SGX ISR
 **Edge**, which looked risky on a level-sensitive source — but it's a display artifact, not the real
 behaviour:
+
 - The OMAP INTC irqchip registers **every** line with `handle_level_irq` and a level mask-ack
   (`ct->type = IRQ_TYPE_LEVEL_MASK`, `irq_ack = omap_mask_ack_irq`; `drivers/irqchip/irq-omap-intc.c:208/230`).
   So the SGX interrupt is genuinely handled as **level** — correct for the source.
 - The chip exposes no `irq_set_type` and the DT interrupt is single-cell, so the per-IRQ
-  *trigger-type metadata* stays `IRQ_TYPE_NONE`; `/proc/interrupts` prints anything that isn't a LEVEL
+  _trigger-type metadata_ stays `IRQ_TYPE_NONE`; `/proc/interrupts` prints anything that isn't a LEVEL
   type as "Edge". Hence **every** INTC line shows "Edge" on this board — confirmed for `i2c` (36k IRQs),
   `mmc0` (173k), `serial`, `DISPC` (45k), `dma-engine` (89k), all level-sensitive and rock-solid.
 
@@ -78,6 +83,7 @@ behaviour:
 there is no edge detector and no coincident-assert loss path. The label is cosmetic.
 
 ## 4. GPT11 availability / clkdev resolution — VERIFIED OK (closed)
+
 **Checked on hardware:** no "Couldn't get GPTIMER11" in dmesg (the DDK's `clk_get(NULL, "gpt11_*")`
 resolved), and the APM/timeout logic it drives works (raising the latency in `0009` changed the
 power-down behaviour as expected — impossible if the timer were dead). `gpt11_fck` reads 32 kHz in
@@ -85,9 +91,10 @@ power-down behaviour as expected — impossible if the timer were dead). `gpt11_
 `sys_ck` while it holds it active. Harmless — no action needed.
 
 ## 5. Cache / DMA coherency in the kick path — NOT DOING (safe as-is)
+
 **What:** the flush path uses coarse `flush_cache_all` / `outer_flush_all` (`osfunc.c` ~2824/2832).
 
-**Decision — leave as-is.** These *over*-flush, so they're conservative/safe, and 2000 frames
+**Decision — leave as-is.** These _over_-flush, so they're conservative/safe, and 2000 frames
 rendered with no corruption or wedge at native performance — neither a correctness nor a perf problem
 here.
 
@@ -95,12 +102,14 @@ here.
 `kill -9` wedge, which is a user-behaviour caveat, not a cache bug).
 
 ## 6. HW-recovery / lockup timer — VERIFIED OK (closed)
+
 **Checked on hardware:** no HW-recovery / `SGXOSTimer` / lockup / reset messages in dmesg across the
 2000-frame soak — the recovery timer is not false-triggering. No action needed.
 
 ---
 
 ## Bottom line
+
 With `0008` (IRQ) + `0009` (APM) the DDK 1.6 stack is stable at native parity over a 2000-frame soak.
 **None of the remaining items is worth pursuing** — #3/#4/#6 are verified correct/clean on hardware
 (the "Edge" label is cosmetic; the IRQ is handled as level), and #2/#5 have no measured symptom and
@@ -108,6 +117,7 @@ carry change-risk. #2 and #5 keep a concrete "reconsider if" trigger above; revi
 workload exhibits it.
 
 ## Test recipe (on the board, per image)
+
 ```sh
 modprobe pvrsrvkm
 insmod /lib/modules/$(uname -r)/kernel/drivers/gpu/drm/pvrsgx/1.6.16.3977/services4/3rdparty/dc_nohw/dcnohw.ko
@@ -118,5 +128,6 @@ dmesg -c >/dev/null
 grep -i SGX /proc/interrupts          # count should have climbed a lot
 dmesg | grep -iE 'sgx|pvr|timeout|recover'
 ```
+
 Never `kill -9` an SGX render app — it wedges the core (survives rmmod; needs power-cycle). Let
 tests exit via `-f <count>`.

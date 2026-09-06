@@ -177,7 +177,7 @@ The AB4 timer correction is still supplied by building
   entered recovery remained permanently limited to CMD24 single-sector writes.
 - **`0008-pvrsgx-sgx-irq-37.patch`** — the fix for the residual `EVENT_OBJECT_WAIT`
   stall. The DDK's `SYS_OMAP3430_SGX_IRQ` requested raw IRQ **21**, which on the DT 7.2
-  kernel is *virq* 21 = **hwirq 5** — the wrong INTC line. `/proc/interrupts` showed
+  kernel is _virq_ 21 = **hwirq 5** — the wrong INTC line. `/proc/interrupts` showed
   `21: 0 INTC 5 Edge SGX ISR` with the count stuck at **0**: the SGX render-complete
   interrupt was never delivered, so every `PVRSRVEventObjectWait` fell through to its poll
   timeout and rendering hung on the first frame. The `omap-intc` linear `irq_domain`

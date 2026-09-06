@@ -7,6 +7,11 @@ PROBE=${SGX_PROBE:-$ARMEL_ROOT/bin/sgx-pbuffer-latency}
 CYCLES=${CYCLES:-5}
 SOAK_SECONDS=${SOAK_SECONDS:-180}
 RESULT_ROOT=${RESULT_ROOT:-/tmp/ddk16-stage0}
+PROBE_ALTERNATE=${PROBE_ALTERNATE:-1}
+PROBE_USE_FBO=${PROBE_USE_FBO:-1}
+PROBE_USE_TEXTURE=${PROBE_USE_TEXTURE:-0}
+PROBE_REBIND_ATTACHMENT=${PROBE_REBIND_ATTACHMENT:-1}
+TRACE_SLOW_BRIDGE=${TRACE_SLOW_BRIDGE:-0}
 
 SERVICES_MODULE="$ROOT/module/pvrsrvkm.ko"
 DC_MODULE="$ROOT/module/dcnohw.ko"
@@ -32,6 +37,17 @@ require_positive_integer()
     esac
 }
 
+require_boolean()
+{
+    name=$1
+    value=$2
+
+    case "$value" in
+        0|1) ;;
+        *) fail "$name must be 0 or 1" ;;
+    esac
+}
+
 unload_modules()
 {
     rmmod dcnohw 2>/dev/null || true
@@ -45,7 +61,11 @@ load_stack()
 {
     unload_modules
     dmesg -C
-    insmod "$SERVICES_MODULE"
+    if [ "$TRACE_SLOW_BRIDGE" = 1 ]; then
+        insmod "$SERVICES_MODULE" trace_slow_bridge=1
+    else
+        insmod "$SERVICES_MODULE"
+    fi
 
     tries=0
     while [ ! -e /dev/pvrsrvkm ] && [ "$tries" -lt 20 ]; do
@@ -71,7 +91,8 @@ run_probe()
 
     timeout 120 env LD_LIBRARY_PATH="$PROBE_LIBPATH" \
         "$PROBE_LOADER" --library-path "$PROBE_LIBPATH" \
-        "$PROBE" "$frames" 1 1 0 > "$output"
+        "$PROBE" "$frames" "$PROBE_ALTERNATE" "$PROBE_USE_FBO" \
+        "$PROBE_USE_TEXTURE" > "$output" 2> "$output.stderr"
 
     grep -q '^egl=1\.4 renderer=PowerVR SGX 530 ' "$output" ||
         fail "probe did not use the DDK 1.6 SGX renderer"
@@ -110,6 +131,11 @@ memory_snapshot()
 [ "$(id -u)" -eq 0 ] || fail "run as root"
 require_positive_integer CYCLES "$CYCLES"
 require_positive_integer SOAK_SECONDS "$SOAK_SECONDS"
+require_boolean PROBE_ALTERNATE "$PROBE_ALTERNATE"
+require_boolean PROBE_USE_FBO "$PROBE_USE_FBO"
+require_boolean PROBE_USE_TEXTURE "$PROBE_USE_TEXTURE"
+require_boolean PROBE_REBIND_ATTACHMENT "$PROBE_REBIND_ATTACHMENT"
+require_boolean TRACE_SLOW_BRIDGE "$TRACE_SLOW_BRIDGE"
 
 for path in "$SERVICES_MODULE" "$DC_MODULE" "$INIT_LOADER" \
             "$ROOT/runtime/pvrsrvinit" "$PROBE_LOADER" "$PROBE"; do
@@ -126,6 +152,10 @@ dc_release=$(modinfo -F vermagic "$DC_MODULE" | awk '{print $1}')
 mkdir -p "$RESULT_ROOT"
 trap 'unload_modules' EXIT INT TERM HUP
 
+printf 'alternate=%s use_fbo=%s use_texture=%s rebind_attachment=%s\n' \
+    "$PROBE_ALTERNATE" "$PROBE_USE_FBO" "$PROBE_USE_TEXTURE" \
+    "$PROBE_REBIND_ATTACHMENT" \
+    > "$RESULT_ROOT/probe-mode.txt"
 sha256sum "$SERVICES_MODULE" "$DC_MODULE" > "$RESULT_ROOT/module-sha256.txt"
 modinfo "$SERVICES_MODULE" > "$RESULT_ROOT/pvrsrvkm.modinfo"
 modinfo "$DC_MODULE" > "$RESULT_ROOT/dcnohw.modinfo"
@@ -149,8 +179,11 @@ start=$(date +%s)
 timeout $((SOAK_SECONDS + 120)) env \
     LD_LIBRARY_PATH="$PROBE_LIBPATH" \
     SGX_DURATION_SECONDS="$SOAK_SECONDS" SGX_SUMMARY_ONLY=1 \
+    SGX_REBIND_ATTACHMENT="$PROBE_REBIND_ATTACHMENT" \
     "$PROBE_LOADER" --library-path "$PROBE_LIBPATH" \
-    "$PROBE" 1 1 1 0 > "$RESULT_ROOT/soak-summary.txt"
+    "$PROBE" 1 "$PROBE_ALTERNATE" "$PROBE_USE_FBO" \
+    "$PROBE_USE_TEXTURE" > "$RESULT_ROOT/soak-summary.txt" \
+    2> "$RESULT_ROOT/soak-stderr.txt"
 
 elapsed=$(($(date +%s) - start))
 memory_snapshot after >> "$RESULT_ROOT/memory.csv"
