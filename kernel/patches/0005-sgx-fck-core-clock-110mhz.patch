@@ -14,7 +14,7 @@ live in omap36xx-am35xx-omap3430es2plus-clocks.dtsi.
 
 --- a/arch/arm/boot/dts/ti/omap/omap3-beagle-ab4.dts
 +++ b/arch/arm/boot/dts/ti/omap/omap3-beagle-ab4.dts
-@@ -44,6 +44,18 @@
+@@ -44,6 +44,17 @@
  	ti,no-idle;
  	timer@0 {
  		assigned-clocks = <&gpt2_fck>;
