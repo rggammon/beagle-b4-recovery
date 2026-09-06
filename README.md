@@ -138,11 +138,20 @@ SGX fixes needed by each image.
   board the DPLL re-lock after an autosuspend power-down intermittently times out;
   keeping the PHY powered (like the old board-file driver) locks the DPLL once and never
   re-cycles it. This is the counterpart to the USB flakiness the C70 note warns about.
+- **`0005-sgx-fck-core-clock-110mhz.patch`** — `omap3-beagle-ab4.dts`: reparent the SGX
+  functional-clock mux (`sgx_mux_fck`, `CM_CLKSEL_SGX`) to `core_d3_ck` so `sgx_fck` runs
+  at **110.67 MHz** (core/3). Mainline leaves it on `core_d6_ck` (core/6 = 55 MHz), half
+  the rate the TI vendor kernel used; at half clock, borderline GPU renders overrun the
+  DDK's fixed 100 ms `EVENT_OBJECT` wait and stall. Inert on the recovery image (no SGX
+  userspace), but keeps the shared `ab4` DTB correct for the GPU image. Verify with
+  `sgx_fck = 110666666` in `/sys/kernel/debug/clk/clk_summary`.
 
 ### Devuan GPU kernel (against OpenPVRSGX Linux 7.2) — `kernel/patches-devuan/`
 
-`kernel/build-devuan.sh` applies these six patches to the OpenPVRSGX `linux+pvrsgx`
-branch. The AB4 timer correction is still supplied by building
+`kernel/build-devuan.sh` applies these seven patches to the fork's DDK 1.6 branch
+(`rggammon/linux_openpvrsgx`, `users/rgammon/pvrsgx-1.6.16.3977`) and builds
+`CONFIG_PVRSGX_1_6_16_3977` + `dc_nohw` (the Phase 0 stack from the presentation plan).
+The AB4 timer correction is still supplied by building
 `omap3-beagle-ab4.dtb`; it is not an additional patch.
 
 - **`0001-omap3-beagle-board-usb-mmc-nand.patch`** — applies the same board DT
@@ -173,6 +182,12 @@ branch. The AB4 timer correction is still supplied by building
   `MQRQ_XFER_SINGLE_BLOCK` flag when a blk-mq tag is reused for a new request, while
   preserving it across retries of the same failed request. Without this, tags that had
   entered recovery remained permanently limited to CMD24 single-sector writes.
+- **`0007-sgx-fck-core-clock-110mhz.patch`** — the same `omap3-beagle-ab4.dts` SGX
+  functional-clock fix as the recovery kernel's `0005`: reparent `sgx_mux_fck` to
+  `core_d3_ck` for `sgx_fck` = 110.67 MHz (core/3) instead of mainline's 55 MHz (core/6).
+  This is the fix for the residual `EVENT_OBJECT_WAIT` stalls — at half clock, renders
+  take ~2x and cross the DDK's 100 ms wait timeout. Confirmed against the native Angstrom
+  vendor kernel, which runs `sgx_fck` at 110.67 MHz.
 
 #### MMC patch evidence
 

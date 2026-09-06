@@ -6,15 +6,16 @@
 # Patches applied (kernel/patches-devuan/): all four recovery-kernel hardware fixes,
 # the DDK core-rev exception/iterator repair, and a Linux 7.2 MMC recovery-state fix.
 #
-# The DDK sources are committed on the linux+pvrsgx branch, so a plain clone tracks them
-# (no submodule / separate download needed).
+# The DDK sources are committed on the fork's DDK 1.6 branch, so a plain clone tracks
+# them (no submodule / separate download needed).
 #
 # Env: CROSS_COMPILE (default arm-linux-gnueabihf-), JOBS (default nproc), WORK, OUT,
-#      OPENPVRSGX_REF (branch or commit to build; default linux+pvrsgx).
+#      OPENPVRSGX_REPO (default the rggammon fork), OPENPVRSGX_REF (branch or commit to
+#      build; default the DDK 1.6 Phase 0 branch users/rgammon/pvrsgx-1.6.16.3977).
 set -eu
 
-REPO=https://github.com/openpvrsgx-devgroup/linux_openpvrsgx
-REF=${OPENPVRSGX_REF:-linux+pvrsgx}
+REPO=${OPENPVRSGX_REPO:-https://github.com/rggammon/linux_openpvrsgx}
+REF=${OPENPVRSGX_REF:-users/rgammon/pvrsgx-1.6.16.3977}
 CROSS=${CROSS_COMPILE:-arm-linux-gnueabihf-}
 JOBS=${JOBS:-$(nproc)}
 here=$(cd "$(dirname "$0")" && pwd)
