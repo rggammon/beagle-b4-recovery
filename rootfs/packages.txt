@@ -45,6 +45,7 @@ tcpdump
 tmux
 u-boot-tools
 udev-init-scripts
+unzip
 usbutils
 util-linux
 xz

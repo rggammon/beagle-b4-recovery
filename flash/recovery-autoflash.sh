@@ -3,7 +3,7 @@
 # build-devuan CI image, download it to USB storage, verify its checksum, write it
 # to the SD card, verify the write, and optionally reboot into it.
 #
-# All prerequisites ship in the recovery image: curl, jq, xz, python3 (unzip),
+# All prerequisites ship in the recovery image: curl, jq, xz, unzip,
 # sha256sum, dd, blkid, blockdev/partx.
 #
 # AUTH: GitHub requires a token to download Actions artifacts, even for public repos.
@@ -106,9 +106,9 @@ zip="$WORKDIR/$ARTIFACT.zip"
 log "downloading artifact -> $zip"
 curl -fL --retry 4 --retry-delay 3 --retry-all-errors -H "Authorization: Bearer $GH_TOKEN" -o "$zip" "$url"
 
-# --- unzip (python3 -- no unzip dependency) + checksum ---
+# --- unzip + checksum ---
 d="$WORKDIR/extract"; rm -rf "$d"; mkdir -p "$d"
-python3 -m zipfile -e "$zip" "$d"
+unzip -o "$zip" -d "$d" >/dev/null
 img=$(ls "$d"/*.img.xz 2>/dev/null | head -1)
 [ -n "$img" ] || die "no .img.xz inside the artifact"
 sums=$(ls "$d"/SHA256SUMS* 2>/dev/null | head -1)
