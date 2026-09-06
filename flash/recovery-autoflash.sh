@@ -69,9 +69,9 @@ fi
 # send the auth header only when we have a token (public reads work without it)
 api() {
   if [ -n "${GH_TOKEN:-}" ]; then
-    curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" "$@"
+    curl -fsSL --retry 4 --retry-delay 3 --retry-all-errors -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" "$@"
   else
-    curl -fsSL -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" "$@"
+    curl -fsSL --retry 4 --retry-delay 3 --retry-all-errors -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" "$@"
   fi
 }
 
@@ -104,7 +104,7 @@ url=$(api "$API/repos/$REPO/actions/runs/$run/artifacts" \
 [ -n "${GH_TOKEN:-}" ] || die "artifact download needs a GitHub token (fine-grained PAT, Actions: read). export GH_TOKEN, or write it to /tmp/gh_token or gh_token on the USB, then re-run."
 zip="$WORKDIR/$ARTIFACT.zip"
 log "downloading artifact -> $zip"
-curl -fL -H "Authorization: Bearer $GH_TOKEN" -o "$zip" "$url"
+curl -fL --retry 4 --retry-delay 3 --retry-all-errors -H "Authorization: Bearer $GH_TOKEN" -o "$zip" "$url"
 
 # --- unzip (python3 -- no unzip dependency) + checksum ---
 d="$WORKDIR/extract"; rm -rf "$d"; mkdir -p "$d"
