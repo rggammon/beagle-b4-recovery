@@ -138,16 +138,6 @@ SGX fixes needed by each image.
   board the DPLL re-lock after an autosuspend power-down intermittently times out;
   keeping the PHY powered (like the old board-file driver) locks the DPLL once and never
   re-cycles it. This is the counterpart to the USB flakiness the C70 note warns about.
-- **`0005-sgx-fck-core-clock-110mhz.patch`** — `omap3-beagle-ab4.dts`: reparent the SGX
-  functional-clock mux (`sgx_mux_fck`, `CM_CLKSEL_SGX`) to `core_d3_ck` so `sgx_fck` runs
-  at **110.67 MHz** (core/3) instead of mainline's `core_d6_ck` (core/6 = 55 MHz). **Note:
-  this is cosmetic, not the stall fix** — the DDK 1.6 module's `EnableSGXClocks` already
-  reparents the composite mux to 110.67 MHz on load, so the clock reaches vendor speed with
-  or without this patch. It was initially suspected as the cause of the residual
-  `EVENT_OBJECT_WAIT` stall; that turned out to be the SGX IRQ mapping (see the devuan
-  `0008` patch). Inert on the recovery image (no SGX userspace) and does not apply at boot
-  anyway (the provider-node `assigned-clock-parents` never fires). Kept only so the shared
-  `ab4` DTB documents the intended parent.
 
 ### Devuan GPU kernel (against OpenPVRSGX Linux 7.2) — `kernel/patches-devuan/`
 
@@ -185,23 +175,25 @@ The AB4 timer correction is still supplied by building
   `MQRQ_XFER_SINGLE_BLOCK` flag when a blk-mq tag is reused for a new request, while
   preserving it across retries of the same failed request. Without this, tags that had
   entered recovery remained permanently limited to CMD24 single-sector writes.
-- **`0007-sgx-fck-core-clock-110mhz.patch`** — the same `omap3-beagle-ab4.dts` SGX
-  functional-clock fix as the recovery kernel's `0005`: reparent `sgx_mux_fck` to
-  `core_d3_ck` for `sgx_fck` = 110.67 MHz (core/3) instead of mainline's 55 MHz (core/6).
-  **Cosmetic — not the stall fix.** The DDK 1.6 module self-sets `sgx_fck` to 110.67 MHz
-  on load (its `EnableSGXClocks` reparents the composite mux), so the GPU already ran at
-  full clock during the original soak; the clock was a red herring. This patch is inert at
-  boot (the provider-node `assigned-clock-parents` never fires) and is kept only for DTB
-  documentation. The actual stall fix is `0008`.
-- **`0008-pvrsgx-sgx-irq-37.patch`** — the real fix for the residual `EVENT_OBJECT_WAIT`
+- **`0008-pvrsgx-sgx-irq-37.patch`** — the fix for the residual `EVENT_OBJECT_WAIT`
   stall. The DDK's `SYS_OMAP3430_SGX_IRQ` requested raw IRQ **21**, which on the DT 7.2
   kernel is *virq* 21 = **hwirq 5** — the wrong INTC line. `/proc/interrupts` showed
   `21: 0 INTC 5 Edge SGX ISR` with the count stuck at **0**: the SGX render-complete
   interrupt was never delivered, so every `PVRSRVEventObjectWait` fell through to its poll
   timeout and rendering hung on the first frame. The `omap-intc` linear `irq_domain`
   allocates virqs from 16, so SGX hwirq 21 maps to **virq 37**. Requesting 37 lands the
-  ISR on the correct line; the count then climbs with rendering and the serialized
-  render/flip soak runs to completion with no timeout flood.
+  ISR on the correct line. Verified on hardware: the count climbs with rendering and a
+  serialized render/flip soak runs to completion with no timeout flood (~30 ms/frame,
+  native parity).
+- **`0009-pvrsgx-apm-latency-500ms.patch`** — raises the SGX active-power-management idle
+  latency (`SYS_SGX_ACTIVE_POWER_LATENCY_MS`) from **1 ms** to **500 ms**. At 1 ms the DDK
+  powers the SGX domain down and up on essentially every serialized frame; each transition
+  takes the `PVRSRVPowerLock` (a test-and-set spun with a fixed ~1 s timeout), and under a
+  long soak one transition eventually stalls long enough that a concurrent render kick's
+  lock times out and returns `PVRSRV_ERROR_UNABLE_TO_LOCK_RESOURCE(104)`. With frames
+  ~30 ms apart, 500 ms keeps the GPU powered throughout active rendering (no per-frame
+  power cycling) while still powering down on genuine idle. Fixes the 2000-frame soak that
+  previously aborted around frame 1500.
 
 #### MMC patch evidence
 

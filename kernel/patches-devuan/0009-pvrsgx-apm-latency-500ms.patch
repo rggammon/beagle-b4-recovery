@@ -1,0 +1,45 @@
+Subject: [PATCH] pvrsgx 1.6: raise SGX active-power-management idle latency to 500 ms
+
+With the SGX interrupt finally delivered (see 0008), DDK 1.6 renders cleanly at
+native speed. But a long serialized soak (sgx_render_flip_test -nf -ser 1, wait
+for completion every frame) intermittently aborts partway through with
+
+    FAIL - PVRSRV_ERROR_UNABLE_TO_LOCK_RESOURCE(104)
+
+not out of memory (tens of MB free) and with a clean dmesg.
+
+Root cause is the Active Power Management idle latency, which the OMAP3 system
+layer sets to *1 ms* (SYS_SGX_ACTIVE_POWER_LATENCY_MS). Under `-ser 1` the GPU
+goes idle between every frame, so at 1 ms the DDK powers the SGX domain down and
+back up on essentially every frame -- thousands of power transitions. Each
+transition takes the power-state-change lock (PVRSRVPowerLock), which is a
+test-and-set spun with a fixed ~1 s timeout (ui32Timeout = 1000000 x OSWaitus(1),
+services4/srvkm/common/power.c). On this board a power transition occasionally
+stalls long enough that a concurrent render kick's PVRSRVPowerLock exhausts the
+1 s timeout and returns UNABLE_TO_LOCK_RESOURCE, which the client sees as a fatal
+error. The more transitions, the sooner it is hit.
+
+Raise the idle latency to 500 ms. Frames are ~30 ms apart, so the SGX now stays
+powered throughout active rendering (zero per-frame power cycling) and only powers
+down after a genuine 500 ms idle -- eliminating the transition churn while keeping
+power management for real idle. Verified: the 2000-frame serialized soak that
+previously aborted at ~frame 1500 now runs to completion with no lock errors.
+
+The DDK sources are committed on the OpenPVRSGX linux+pvrsgx branch, so a plain
+clone tracks this file; kernel/build-devuan.sh applies the patch with `patch -p1`.
+---
+ .../pvrsgx/1.6.16.3977/services4/system/omap3/sysconfig.h | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/gpu/drm/pvrsgx/1.6.16.3977/services4/system/omap3/sysconfig.h b/drivers/gpu/drm/pvrsgx/1.6.16.3977/services4/system/omap3/sysconfig.h
+--- a/drivers/gpu/drm/pvrsgx/1.6.16.3977/services4/system/omap3/sysconfig.h
++++ b/drivers/gpu/drm/pvrsgx/1.6.16.3977/services4/system/omap3/sysconfig.h
+@@ -41,7 +41,7 @@
+ #define SYS_SGX_PDS_TIMER_FREQ                         (1000)
+ 
+ #if !defined(SYS_SGX_ACTIVE_POWER_LATENCY_MS)
+-#define SYS_SGX_ACTIVE_POWER_LATENCY_MS                (1)
++#define SYS_SGX_ACTIVE_POWER_LATENCY_MS                (500)
+ #endif
+ 
+ 

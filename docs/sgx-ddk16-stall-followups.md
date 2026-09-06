@@ -8,37 +8,40 @@ count stuck at 0) and every `PVRSRVEventObjectWait` timed out. Fixed by
 (21 → 37). The clock patches (`0005`/`0007`) were red herrings — the DDK module self-sets
 `sgx_fck` to 110.67 MHz on load.
 
-Strategy: **soak the IRQ-only image first.** Native Angstrom ran DDK 1.6 clean (27–32 ms/frame,
-no flood) with the *same* 1 ms APM and workqueue MISR — the only thing it got right that we
-didn't was interrupt delivery. So the IRQ fix alone may be sufficient. The items below only
-matter for *residual* jitter/outliers/wedge and should be applied (and bisected) only if the
-IRQ-only soak still shows problems. Prefer full build + flash over SD-card patching.
+## Status (2026-09-06)
+- **Residual `EVENT_OBJECT_WAIT` stall: RESOLVED** by
+  [0008-pvrsgx-sgx-irq-37.patch](../kernel/patches-devuan/0008-pvrsgx-sgx-irq-37.patch).
+  Verified on hardware: `37: … INTC 21 SGX ISR` fires every frame; 500-frame serialized soak
+  clean at ~30 ms/frame (native parity), zero timeout flood.
+- **`PVRSRV_ERROR_UNABLE_TO_LOCK_RESOURCE(104)` under long soak: RESOLVED** by
+  [0009-pvrsgx-apm-latency-500ms.patch](../kernel/patches-devuan/0009-pvrsgx-apm-latency-500ms.patch)
+  (item #1 below).
+- The clock patches were confirmed inert red herrings and have been **removed** from the tree.
+- Remaining items (#2–#6) are optional hardening; none is required for stable rendering.
 
-All source line refs are in the DDK tree on the fork branch
+Source line refs are in the DDK tree on the fork branch
 (`rggammon/linux_openpvrsgx`, `users/rgammon/pvrsgx-1.6.16.3977`),
 under `drivers/gpu/drm/pvrsgx/1.6.16.3977/`.
 
 ---
 
-## 1. APM at 1 ms + `ti-sysc` idle ownership  — TOP suspect
-**What:** `SUPPORT_ACTIVE_POWER_MANAGEMENT` is on and `SYS_SGX_ACTIVE_POWER_LATENCY_MS = 1`
-(`services4/system/omap3/sysconfig.h:44`), so the DDK powers the SGX **down after 1 ms idle** —
-i.e. it power-cycles the core every frame in a serialized `-ser 1` render. Meanwhile the DT
-wraps SGX in a **`ti,sysc` target-module** (`sgx_module: target-module@50000000`,
-`compatible = "ti,sysc-omap2"`, `omap34xx.dtsi`) that manages idle/standby/reset via
-`pm_runtime`, but the DDK uses **raw `clk_enable` + PRCM pokes with no `pm_runtime`**
-(no `pm_runtime_*` anywhere in the DDK linux/system code). Two owners of the module's power
-state. `&sgx_module` has **no `ti,no-idle`** (the board dts applies it only to the timer
-modules), so ti-sysc is free to auto-idle SGX under the DDK.
+## 1. APM at 1 ms + `ti-sysc` idle ownership — RESOLVED (0009)
+**What:** `SYS_SGX_ACTIVE_POWER_LATENCY_MS = 1` (`services4/system/omap3/sysconfig.h:44`) made
+the DDK power-cycle the SGX domain on essentially every serialized frame. Each transition takes
+`PVRSRVPowerLock` — a test-and-set spun with a fixed ~1 s timeout (`services4/srvkm/common/power.c`).
+Under a long soak one transition eventually stalls >1 s, so a concurrent render kick's lock times
+out and returns **`PVRSRV_ERROR_UNABLE_TO_LOCK_RESOURCE(104)`** (seen at ~frame 1500 of a
+2000-frame `-ser 1` soak; not OOM, dmesg clean).
 
-**Why it matters:** a power-down/up straddling the render→completion window can lose or delay
-the completion IRQ — the likely cause of the >500 ms/3.3 s outliers and the teardown hang.
+**Fix:** [0009-pvrsgx-apm-latency-500ms.patch](../kernel/patches-devuan/0009-pvrsgx-apm-latency-500ms.patch)
+raises the idle latency to 500 ms. Frames are ~30 ms apart, so the SGX stays powered through active
+rendering (no per-frame cycling) and only powers down on genuine idle.
 
-**Experiments (cheap, isolated):**
-- **DT-only** (dtb rebuild + reflash): add `ti,no-idle;` to `&sgx_module` in the board dts — new
-  `patches-devuan/` patch. Pins the module active so ti-sysc can't idle it.
-- **Define-only** (module rebuild): raise `SYS_SGX_ACTIVE_POWER_LATENCY_MS` to ~500, or build
-  without `SUPPORT_ACTIVE_POWER_MANAGEMENT`. If outliers vanish → APM/idle sequencing confirmed.
+**Optional further hardening (not currently needed):** the DT wraps SGX in a `ti,sysc` target-module
+(`sgx_module: target-module@50000000`, `omap34xx.dtsi`) that manages idle via `pm_runtime`, while the
+DDK uses raw `clk_enable`/PRCM pokes (no `pm_runtime`) — two owners. `&sgx_module` has no `ti,no-idle`.
+If power-lock issues ever recur on idle→resume, add `ti,no-idle;` to `&sgx_module`, or build without
+`SUPPORT_ACTIVE_POWER_MANAGEMENT` to eliminate transitions entirely.
 
 ## 2. MISR on a normal-priority single-threaded workqueue
 **What:** the build selects `PVR_LINUX_MISR_USING_PRIVATE_WORKQUEUE` (`Makefile:348`). Path is
