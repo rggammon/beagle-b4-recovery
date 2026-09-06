@@ -48,6 +48,9 @@ sudo cp -a "$here/overlay/." rootfs/
 sudo chmod 700 rootfs/root/.ssh; sudo chmod 600 rootfs/root/.ssh/authorized_keys
 sudo chmod 755 rootfs/sbin/rng-seed
 
+# self-service: wait for the latest build-devuan CI image, download to USB, flash the SD.
+sudo install -Dm755 "$here/../flash/recovery-autoflash.sh" rootfs/usr/local/sbin/autoflash-devuan
+
 # 3. kernel + ab4 dtb into /boot (loaded by U-Boot's ubifsload).
 sudo mkdir -p rootfs/boot
 sudo cp "$out/zImage" rootfs/boot/zImage
