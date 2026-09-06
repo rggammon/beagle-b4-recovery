@@ -53,6 +53,12 @@ sudo mkdir -p rootfs/boot
 sudo cp "$out/zImage" rootfs/boot/zImage
 sudo cp "$out/omap3-beagle-ab4.dtb" rootfs/boot/omap3-beagle-ab4.dtb
 
+# 3b. Normalise ownership to root:root. The build runs under the CI user (uid 1001) and
+#     `cp -a` on the checked-out overlay preserves that uid, so files like
+#     /root/.ssh/authorized_keys ship owned by 1001 -- which sshd StrictModes rejects
+#     (root's key path must be owned by root), breaking key-based login to the appliance.
+sudo chown -R 0:0 rootfs
+
 # 4. read-only UBIFS -> UBI image (for the NAND appliance).
 sudo mkfs.ubifs -m 2048 -e 126976 -c 1900 -x lzo -o rootfs.ubifs -r rootfs
 ubinize -o "$out/rootfs.ubi" -p 128KiB -m 2048 -s 2048 "$here/../flash/ubinize.cfg"
