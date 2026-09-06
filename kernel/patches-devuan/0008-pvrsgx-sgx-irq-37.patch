@@ -1,0 +1,49 @@
+Subject: [PATCH] pvrsgx 1.6: request the SGX interrupt on virq 37 (hwirq 21)
+
+On the OMAP3530 the SGX MMU/host interrupt is INTC line 21 (hwirq 21).
+The DDK carries this as a raw Linux IRQ number in SYS_OMAP3430_SGX_IRQ and
+passes it straight to request_irq() (LinuxInstallIRQ -> OSInstallDeviceLISR),
+which on this kernel is a *virtual* IRQ, not the hwirq.
+
+Under the old board-file kernels virq == hwirq, so 21 worked. On the DT
+(device-tree) 7.2 kernel the omap-intc linear irq_domain allocates virqs
+starting at 16, so hwirq N maps to virq N+16. Requesting 21 therefore binds
+the ISR to *hwirq 5* (a different, idle peripheral):
+
+    21:          0  INTC        5 Edge      SGX ISR   <-- count never moves
+
+With the ISR on the wrong line the SGX render-complete interrupt is never
+delivered, so every PVRSRVEventObjectWait() falls through to its poll
+timeout. User space hangs on the first frame with an endless
+
+    sgxut_wait_for_buffer: PVRSRVEventObjectWait returned
+        PVRSRV_ERROR_TIMEOUT (retrying)
+
+flood -- the residual "EVENT_OBJECT_WAIT stall". (This was previously
+mis-attributed to the SGX functional clock; the clock self-sets to 110 MHz
+on module load and was never the cause.)
+
+Map the SGX hwirq (21) to its virq (21 + 16 = 37) so the ISR lands on the
+correct INTC line. Verified on hardware: after the change the ISR count
+climbs with rendering (3 -> 1970 over a soak) and the serialized
+render/flip test runs to completion with no EVENT_OBJECT timeouts.
+
+The DDK sources are committed on the OpenPVRSGX linux+pvrsgx branch, so a
+plain clone tracks this file; kernel/build-devuan.sh applies the patch with
+`patch -p1`.
+---
+ .../pvrsgx/1.6.16.3977/services4/system/omap3/sysconfig.h | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/gpu/drm/pvrsgx/1.6.16.3977/services4/system/omap3/sysconfig.h b/drivers/gpu/drm/pvrsgx/1.6.16.3977/services4/system/omap3/sysconfig.h
+--- a/drivers/gpu/drm/pvrsgx/1.6.16.3977/services4/system/omap3/sysconfig.h
++++ b/drivers/gpu/drm/pvrsgx/1.6.16.3977/services4/system/omap3/sysconfig.h
+@@ -49,7 +49,7 @@
+ 
+ #define SYS_OMAP3430_SGX_REGS_SIZE           0x4000
+ 
+-#define SYS_OMAP3430_SGX_IRQ                            21
++#define SYS_OMAP3430_SGX_IRQ                            37
+ 
+ #define SYS_OMAP3430_GP11TIMER_ENABLE_SYS_PHYS_BASE  0x48088024
+ #define SYS_OMAP3430_GP11TIMER_REGS_SYS_PHYS_BASE       0x48088028
