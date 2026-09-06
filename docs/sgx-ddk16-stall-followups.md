@@ -17,8 +17,8 @@ count stuck at 0) and every `PVRSRVEventObjectWait` timed out. Fixed by
   [0009-pvrsgx-apm-latency-500ms.patch](../kernel/patches-devuan/0009-pvrsgx-apm-latency-500ms.patch)
   (item #1 below).
 - The clock patches were confirmed inert red herrings and have been **removed** from the tree.
-- Remaining items (#2–#6) assessed below: **#4 and #6 verified clean on hardware; #2/#3/#5 have no
-  measured symptom.** None is worth pursuing proactively — each has a concrete "reconsider if" trigger.
+- Remaining items (#2–#6) assessed below: **#3, #4, #6 verified/closed on hardware; #2 and #5 have no
+  measured symptom.** None is worth pursuing proactively — #2/#5 carry a concrete "reconsider if" trigger.
 
 Source line refs are in the DDK tree on the fork branch
 (`rggammon/linux_openpvrsgx`, `users/rgammon/pvrsgx-1.6.16.3977`),
@@ -62,18 +62,20 @@ measured gain.
 timing to prove MISR jitter is the bottleneck, and try the lighter `WQ_HIGHPRI` (stays in process
 context) before the tasklet.
 
-## 3. Interrupt trigger type (Edge vs Level) — NOT DOING (empirically fine)
-**What:** `/proc/interrupts` shows the SGX ISR as **Edge**; the SGX host IRQ on OMAP3 is
-level-sensitive, and an edge registration could in theory drop a completion coinciding with another
-assert. The DT `gpu@0` uses single-cell `interrupts = <21>` (the omap-intc driver picks the flow
-type; there is no trigger cell to set).
+## 3. Interrupt trigger type (Edge vs Level) — NON-ISSUE (handled as level; "Edge" is cosmetic)
+**Investigated for correctness** (not just "seems fine"). `/proc/interrupts` labels the SGX ISR
+**Edge**, which looked risky on a level-sensitive source — but it's a display artifact, not the real
+behaviour:
+- The OMAP INTC irqchip registers **every** line with `handle_level_irq` and a level mask-ack
+  (`ct->type = IRQ_TYPE_LEVEL_MASK`, `irq_ack = omap_mask_ack_irq`; `drivers/irqchip/irq-omap-intc.c:208/230`).
+  So the SGX interrupt is genuinely handled as **level** — correct for the source.
+- The chip exposes no `irq_set_type` and the DT interrupt is single-cell, so the per-IRQ
+  *trigger-type metadata* stays `IRQ_TYPE_NONE`; `/proc/interrupts` prints anything that isn't a LEVEL
+  type as "Edge". Hence **every** INTC line shows "Edge" on this board — confirmed for `i2c` (36k IRQs),
+  `mmc0` (173k), `serial`, `DISPC` (45k), `dma-engine` (89k), all level-sensitive and rock-solid.
 
-**Decision — leave as-is.** Empirically fine: 2000 frames delivered **4001** interrupts with **zero**
-lost completions (any loss would have produced a retry/stall). Single-context serialized rendering
-doesn't create the coincident-assert case the edge concern needs.
-
-**Reconsider if:** we run concurrent GL contexts or transfer-heavy workloads and see *rare*
-lost-interrupt stalls. Then check the omap-intc flow handler / force level-high.
+**Decision — nothing to do.** The SGX IRQ is handled exactly like the i2c/mmc/serial lines (level);
+there is no edge detector and no coincident-assert loss path. The label is cosmetic.
 
 ## 4. GPT11 availability / clkdev resolution — VERIFIED OK (closed)
 **Checked on hardware:** no "Couldn't get GPTIMER11" in dmesg (the DDK's `clk_get(NULL, "gpt11_*")`
@@ -100,9 +102,10 @@ here.
 
 ## Bottom line
 With `0008` (IRQ) + `0009` (APM) the DDK 1.6 stack is stable at native parity over a 2000-frame soak.
-**None of the remaining items is worth pursuing proactively** — #4 and #6 are verified clean, and
-#2/#3/#5 have no measured symptom and carry change-risk. Each has a concrete "reconsider if" trigger
-above; revisit only when a real workload exhibits it.
+**None of the remaining items is worth pursuing** — #3/#4/#6 are verified correct/clean on hardware
+(the "Edge" label is cosmetic; the IRQ is handled as level), and #2/#5 have no measured symptom and
+carry change-risk. #2 and #5 keep a concrete "reconsider if" trigger above; revisit only when a real
+workload exhibits it.
 
 ## Test recipe (on the board, per image)
 ```sh
