@@ -17,7 +17,8 @@ count stuck at 0) and every `PVRSRVEventObjectWait` timed out. Fixed by
   [0009-pvrsgx-apm-latency-500ms.patch](../kernel/patches-devuan/0009-pvrsgx-apm-latency-500ms.patch)
   (item #1 below).
 - The clock patches were confirmed inert red herrings and have been **removed** from the tree.
-- Remaining items (#2–#6) are optional hardening; none is required for stable rendering.
+- Remaining items (#2–#6) assessed below: **#4 and #6 verified clean on hardware; #2/#3/#5 have no
+  measured symptom.** None is worth pursuing proactively — each has a concrete "reconsider if" trigger.
 
 Source line refs are in the DDK tree on the fork branch
 (`rggammon/linux_openpvrsgx`, `users/rgammon/pvrsgx-1.6.16.3977`),
@@ -43,55 +44,65 @@ DDK uses raw `clk_enable`/PRCM pokes (no `pm_runtime`) — two owners. `&sgx_mod
 If power-lock issues ever recur on idle→resume, add `ti,no-idle;` to `&sgx_module`, or build without
 `SUPPORT_ACTIVE_POWER_MANAGEMENT` to eliminate transitions entirely.
 
-## 2. MISR on a normal-priority single-threaded workqueue
-**What:** the build selects `PVR_LINUX_MISR_USING_PRIVATE_WORKQUEUE` (`Makefile:348`). Path is
-hard IRQ (LISR) → `queue_work(pvr_workqueue, …)` → MISR runs in **process context on a
-normal-priority, single-threaded workqueue** (`create_singlethread_workqueue("pvr_workqueue")`,
-`services4/srvkm/env/linux/osfunc.c:760`), and only there is the global event object signalled.
+## 2. MISR on a normal-priority single-threaded workqueue — NOT DOING (no measured need)
+**What:** the build selects `PVR_LINUX_MISR_USING_PRIVATE_WORKQUEUE` (`Makefile:348`): hard IRQ
+(LISR) → `queue_work(pvr_workqueue, …)` → the global event object is signalled from a
+normal-priority, single-threaded workqueue (`create_singlethread_workqueue`, `osfunc.c:760`), i.e.
+process context that can be preempted.
 
-**Why it matters:** under contention that thread can be preempted → tens of ms jitter → borderline
-frames cross the fixed 100 ms wait *even with the IRQ firing correctly*.
+**Decision — leave as-is.** No measured problem: the 2000-frame `-ser 1` soak had **zero** retries,
+so no completion was signalled later than the ~100 ms wait allows (worst-case delivery stayed well
+under ~70 ms), and the mean was at native parity (28.7 ms). The native Angstrom stack ran this same
+workqueue-MISR default cleanly, so it's already proven adequate on this silicon. The tasklet
+alternative runs in softirq/atomic context — real risk (no sleeping; can hurt system latency) for no
+measured gain.
 
-**Fix (module rebuild):** switch to the **tasklet** MISR (softirq, runs right after the IRQ) —
-the DDK already ships it (`osfunc.c:917` `tasklet_init` / `tasklet_schedule`). Drop the
-`MISR_USING_*WORKQUEUE` defines (→ tasklet), or as a lighter touch use `WQ_HIGHPRI`.
+**Reconsider if:** a latency-sensitive workload (e.g. 60 fps interactive/compositing UI) shows
+*visible* jitter that never trips the 100 ms watchdog. Then first capture per-frame **max/p99**
+timing to prove MISR jitter is the bottleneck, and try the lighter `WQ_HIGHPRI` (stays in process
+context) before the tasklet.
 
-## 3. Interrupt trigger type — verify-only, after 0008
-**What:** `/proc/interrupts` showed the (bogus) line as **Edge**, and the DDK requests with
-**`IRQF_SHARED`** (`osfunc.c:640`/`694`). The DT `gpu@0` uses single-cell `interrupts = <21>`
-(no trigger flag). The SGX host/MMU IRQ is **level-sensitive** on OMAP3.
+## 3. Interrupt trigger type (Edge vs Level) — NOT DOING (empirically fine)
+**What:** `/proc/interrupts` shows the SGX ISR as **Edge**; the SGX host IRQ on OMAP3 is
+level-sensitive, and an edge registration could in theory drop a completion coinciding with another
+assert. The DT `gpu@0` uses single-cell `interrupts = <21>` (the omap-intc driver picks the flow
+type; there is no trigger cell to set).
 
-**Why it matters:** an edge registration can drop a completion that coincides with another assert.
+**Decision — leave as-is.** Empirically fine: 2000 frames delivered **4001** interrupts with **zero**
+lost completions (any loss would have produced a retry/stall). Single-context serialized rendering
+doesn't create the coincident-assert case the edge concern needs.
 
-**Check:** once `0008` lands, confirm virq 37 shows **Level** (not Edge) in `/proc/interrupts`.
-If it's Edge, fix the omap-intc/DT interrupt type. Low effort.
+**Reconsider if:** we run concurrent GL contexts or transfer-heavy workloads and see *rare*
+lost-interrupt stalls. Then check the omap-intc flow handler / force level-high.
 
-## 4. GPT11 availability / clkdev resolution
-**What:** `EnableSystemClocks` grabs `gpt11_fck`/`gpt11_ick` via `clk_get(NULL, …)` and reparents
-GPT11 to `sys_ck`, posted mode (`services4/system/omap3/sysutils_linux.c:570–617`) for the DDK's
-microsecond timer (drives APM/timeouts). We already moved the kernel clockevent/clocksource off
-GPT11 to GPT2/GPT12, so there's **no ownership conflict** — but on CCF `clk_get(NULL, "gpt11_fck")`
-needs a clkdev alias.
+## 4. GPT11 availability / clkdev resolution — VERIFIED OK (closed)
+**Checked on hardware:** no "Couldn't get GPTIMER11" in dmesg (the DDK's `clk_get(NULL, "gpt11_*")`
+resolved), and the APM/timeout logic it drives works (raising the latency in `0009` changed the
+power-down behaviour as expected — impossible if the timer were dead). `gpt11_fck` reads 32 kHz in
+`clk_summary` **only when released/idle** (enable count 0 after a soak); the DDK reparents it to
+`sys_ck` while it holds it active. Harmless — no action needed.
 
-**Check:** `dmesg | grep -i GPTIMER11` for "Couldn't get", and confirm GPT11 actually ticks. If the
-DDK timer is dead, its APM/timeout logic misbehaves regardless of #1. Low effort.
+## 5. Cache / DMA coherency in the kick path — NOT DOING (safe as-is)
+**What:** the flush path uses coarse `flush_cache_all` / `outer_flush_all` (`osfunc.c` ~2824/2832).
 
-## 5 (lower). Cache / DMA coherency in the kick path
-Coarse `flush_cache_all` / `outer_flush_all` (`osfunc.c` ~2824/2832). More a corruption/wedge risk
-than a clean lost-IRQ stall, but relevant to the kill-wedge and teardown hang. Chase only if 1–3
-don't fully settle it.
+**Decision — leave as-is.** These *over*-flush, so they're conservative/safe, and 2000 frames
+rendered with no corruption or wedge at native performance — neither a correctness nor a perf problem
+here.
 
-## 6 (lower). HW-recovery / lockup timer
-Ensure the 1.6 HW-recovery timer isn't false-triggering a GPU reset that looks like a stall. Check
-config + `dmesg` for HW-recovery / `SGXOSTimer` messages.
+**Reconsider if:** we ever see rendering corruption or coherency wedges (distinct from the known
+`kill -9` wedge, which is a user-behaviour caveat, not a cache bug).
+
+## 6. HW-recovery / lockup timer — VERIFIED OK (closed)
+**Checked on hardware:** no HW-recovery / `SGXOSTimer` / lockup / reset messages in dmesg across the
+2000-frame soak — the recovery timer is not false-triggering. No action needed.
 
 ---
 
-## Priority
-1. **#1 (APM + `ti,no-idle`)** and **#2 (MISR → tasklet)** — most likely residual causes; small,
-   isolated changes; good batch-2 patches if the IRQ-only soak shows residual issues.
-2. **#3, #4** — verify-only, do during the first soak.
-3. **#5, #6** — only if the above don't fully resolve.
+## Bottom line
+With `0008` (IRQ) + `0009` (APM) the DDK 1.6 stack is stable at native parity over a 2000-frame soak.
+**None of the remaining items is worth pursuing proactively** — #4 and #6 are verified clean, and
+#2/#3/#5 have no measured symptom and carry change-risk. Each has a concrete "reconsider if" trigger
+above; revisit only when a real workload exhibits it.
 
 ## Test recipe (on the board, per image)
 ```sh
