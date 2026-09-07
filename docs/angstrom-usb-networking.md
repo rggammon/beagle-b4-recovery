@@ -14,11 +14,16 @@ serial: **COM12 @ 115200 8N1** (no flow control).
 - `musb-hdrc`, `musb-omap2430`, and the `twl4030_usb` PHY are **built into the kernel** (no `.ko`),
   and all three are **bound** (present under `/sys/bus/platform/devices/` and
   `/sys/bus/platform/drivers/`). The controller + PHY are up.
-- The OTG port comes up in mode **`b_idle`** (`cat /sys/bus/platform/devices/musb-hdrc/mode`).
+- The OTG port comes up in mode **`b_idle`** (`cat /sys/bus/platform/devices/musb-hdrc/mode`), and
+  the musb controller + `twl4030_usb` PHY stay **idle until a gadget driver is loaded** — `insmod`ing
+  any gadget (e.g. `g_ether.ko`) is what powers them up. **The attached cable's ID pin then selects the
+  role:** a plain mini‑B cable (ID floating) → **peripheral** (`usb0` gadget, Option A); an **OTG/host
+  cable with ID grounded** → **host** (`b_idle` → `a_host`, Option B).
 - **No UDC** is registered until a gadget driver is loaded (`/sys/class/udc/` is empty at boot).
 - `dmesg` boot messages may be gone if you ran `dmesg -c` (we do that during SGX tests).
 
-Two usable paths: **gadget** (board = USB device to a PC) or **host** (USB NIC/hub into the board).
+Two usable paths, **both triggered by loading a gadget driver and selected by the cable**: **gadget**
+(board = USB device to a PC) or **host** (USB NIC/hub into the board).
 
 ---
 
@@ -27,7 +32,9 @@ Two usable paths: **gadget** (board = USB device to a PC) or **host** (USB NIC/h
 Works with just a normal mini‑USB cable from the board's OTG port to the PC.
 
 ```sh
-insmod /lib/modules/3.0.14+/kernel/drivers/usb/gadget/g_ether.ko
+insmod /lib/modules/3.0.14+/kernel/drivers/usb/gadget/g_ether.koinsmod /lib/modules/3.0.14+/kernel/drivers/usb/gadget/g_ether.ko   # wakes PHY; ID-grounded cable => host
+ifconfig eth0                                                        # should show 192.168.50.125 (connman DHCP)
+# if no IP yet:  udhcpc -i eth0
 ifconfig usb0 192.168.7.2 netmask 255.255.255.0 up
 ```
 
@@ -43,11 +50,31 @@ ifconfig usb0 192.168.7.2 netmask 255.255.255.0 up
 
 ---
 
-## Option B — Host: real USB Ethernet NIC into the board (puts board on the LAN)
+## Option B — Host: real USB Ethernet NIC into the board (puts board on the LAN) — VERIFIED
 
-Plug a USB NIC (via an OTG/host cable, or a self‑powered hub) into the OTG port. Host mode works
-(verified: a hub with an ASIX NIC, a flash drive `/dev/sda`, a BT dongle, and an HID all enumerated).
-You need a NIC whose driver is present on the image.
+The OTG port **does not enter host mode on its own** — it boots `b_idle`. Two things bring it up:
+
+1. **Hardware:** an **OTG/host cable with the ID pin grounded** (mini‑A, _not_ a plain mini‑B) into the
+   OTG port, feeding a **self‑powered hub** (the OTG port sources almost no VBUS) with the NIC (and any
+   other devices) attached.
+2. **Software kick:** load a gadget driver to power the controller + `twl4030_usb` PHY. With the ID
+   pin grounded, the OTG state machine then comes up **host** and enumerates the hub:
+
+```sh
+insmod /lib/modules/3.0.14+/kernel/drivers/usb/gadget/g_ether.ko
+cat /sys/bus/platform/devices/musb-hdrc/mode   # b_idle -> a_host
+dmesg | tail    # "MUSB HDRC host driver", "new USB bus ... number 2", "hub 2-0:1.0: USB hub found", then NIC binds
+ls /sys/class/net/                              # eth0 appears
+```
+
+**Verified:** this brought up the hub's **ASIX NIC as `eth0` (100 Mbps full‑duplex)** on host bus 2
+(plus a flash drive `/dev/sda` and a BT dongle), and `eth0` took a **DHCP lease on the LAN**
+(`default via 192.168.50.1 dev eth0`) — the board is on the real network, nicer than the point‑to‑point
+`usb0`. `g_ether` also creates a `usb0` gadget interface, but with the host cable in, `eth0` is the
+live path. (The controller/PHY are idle until _some_ gadget loads, so this `insmod` is required even
+for host mode — it is not the gadget itself that matters, just that it wakes the PHY.)
+
+You still need a NIC whose driver is present on the image (see the table + caveat below).
 
 ### USB NIC drivers on this image
 
