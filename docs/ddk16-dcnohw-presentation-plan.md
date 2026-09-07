@@ -205,7 +205,9 @@ Before and after each later stage:
    `dc_nohw`, run the probe, unload `dc_nohw`, and unload Services.
 2. Run one alternating-FBO process continuously for at least three minutes.
 3. Record memory before and after the cycles to detect leaked pages or handles.
-4. Confirm IRQ 21 remains registered as `SGX ISR` while initialized.
+4. Confirm the `SGX ISR` is registered on Linux **virq 37** (INTC hwirq 21) with a
+   rising count while initialized. (Raw IRQ 21 was the pre-`0008` bug: on the DT
+   kernel it binds virq 21 = hwirq 5, the wrong line — see the stall follow-ups.)
 5. Reject any BIF fault, `HWRecoveryResetSGX`, watchdog recovery, Oops, BUG,
    build-option mismatch, or process hang.
 

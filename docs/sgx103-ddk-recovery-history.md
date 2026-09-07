@@ -48,7 +48,8 @@ with a complete SGX103 payload. DDK 1.4 remains the rollback baseline.
 
 DDK `1.4.14.2616` uses the exact SGX103 soft-float userspace recovered from
 OpenPandora SuperZaxxon 1.76. Its Linux 7.2 Services port initializes, registers
-IRQ 21 as `SGX ISR`, and renders without completion stalls.
+the `SGX ISR` on virq 37 (INTC hwirq 21 on the DT 7.2 kernel), and renders
+without completion stalls.
 
 Maintained source:
 
