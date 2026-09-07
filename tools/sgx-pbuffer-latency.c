@@ -11,6 +11,7 @@
 #define EGL_OPENGL_ES_API 0x30a0
 #define EGL_SURFACE_TYPE 0x3033
 #define EGL_PBUFFER_BIT 0x0001
+#define EGL_WINDOW_BIT 0x0004
 #define EGL_RENDERABLE_TYPE 0x3040
 #define EGL_OPENGL_ES2_BIT 0x0004
 #define EGL_RED_SIZE 0x3024
@@ -47,6 +48,7 @@ typedef void *EGLDisplay;
 typedef void *EGLContext;
 typedef void *EGLConfig;
 typedef void *EGLSurface;
+typedef void *EGLNativeWindowType;
 typedef int EGLint;
 typedef unsigned int EGLBoolean;
 typedef void *EGLDeviceEXT;
@@ -118,6 +120,13 @@ int main(int argc, char **argv)
                                  atoi(getenv("SGX_DURATION_SECONDS")) : 0;
     const int summary_only = getenv("SGX_SUMMARY_ONLY") != NULL &&
                              atoi(getenv("SGX_SUMMARY_ONLY")) != 0;
+    const int skip_render = getenv("SGX_SKIP_RENDER") != NULL &&
+                            atoi(getenv("SGX_SKIP_RENDER")) != 0;
+    /* Native stacks (omaplfb/fbdev) expose ES2 only on WINDOW configs, not
+       pbuffer. SGX_WINDOW=1 selects a fullscreen fbdev window surface instead;
+       the framebuffer must be free (stop the display manager first). */
+    const int use_window = getenv("SGX_WINDOW") != NULL &&
+                           atoi(getenv("SGX_WINDOW")) != 0;
     void *egl_library;
     void *gles_library;
     EGLDisplay display;
@@ -145,6 +154,7 @@ int main(int argc, char **argv)
     EGLBoolean (*eglChooseConfig)(EGLDisplay, const EGLint *, EGLConfig *, EGLint, EGLint *);
     EGLContext (*eglCreateContext)(EGLDisplay, EGLConfig, EGLContext, const EGLint *);
     EGLSurface (*eglCreatePbufferSurface)(EGLDisplay, EGLConfig, const EGLint *);
+    EGLSurface (*eglCreateWindowSurface)(EGLDisplay, EGLConfig, EGLNativeWindowType, const EGLint *);
     EGLBoolean (*eglMakeCurrent)(EGLDisplay, EGLSurface, EGLSurface, EGLContext);
     EGLBoolean (*eglDestroySurface)(EGLDisplay, EGLSurface);
     EGLBoolean (*eglDestroyContext)(EGLDisplay, EGLContext);
@@ -178,6 +188,19 @@ int main(int argc, char **argv)
         EGL_GREEN_SIZE, 8,
         EGL_BLUE_SIZE, 8,
         EGL_ALPHA_SIZE, 8,
+        EGL_NONE
+    };
+    /* Fallback for stacks (e.g. native omaplfb/fbdev) that expose no exact
+       RGBA8888 pbuffer config: the pbuffer only makes a context current, so its
+       color format is irrelevant to the render-to-texture path under test. */
+    const EGLint config_attributes_min[] = {
+        EGL_SURFACE_TYPE, EGL_PBUFFER_BIT,
+        EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
+        EGL_NONE
+    };
+    const EGLint config_attributes_window[] = {
+        EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
+        EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
         EGL_NONE
     };
     const EGLint context_attributes[] = {
@@ -215,6 +238,7 @@ int main(int argc, char **argv)
     eglChooseConfig = symbol(egl_library, "eglChooseConfig");
     eglCreateContext = symbol(egl_library, "eglCreateContext");
     eglCreatePbufferSurface = symbol(egl_library, "eglCreatePbufferSurface");
+    eglCreateWindowSurface = symbol(egl_library, "eglCreateWindowSurface");
     eglMakeCurrent = symbol(egl_library, "eglMakeCurrent");
     eglDestroySurface = symbol(egl_library, "eglDestroySurface");
     eglDestroyContext = symbol(egl_library, "eglDestroyContext");
@@ -277,18 +301,66 @@ int main(int argc, char **argv)
     }
     if (!eglBindAPI(EGL_OPENGL_ES_API))
         fail("eglBindAPI");
-    if (!eglChooseConfig(display, config_attributes, &config, 1, &config_count) || config_count != 1)
-        fail("eglChooseConfig");
+    if (getenv("SGX_DUMP_CONFIGS") != NULL) {
+        EGLBoolean (*eglGetConfigs)(EGLDisplay, EGLConfig *, EGLint, EGLint *) =
+            symbol(egl_library, "eglGetConfigs");
+        EGLBoolean (*eglGetConfigAttrib)(EGLDisplay, EGLConfig, EGLint, EGLint *) =
+            symbol(egl_library, "eglGetConfigAttrib");
+        EGLConfig configs[128];
+        EGLint total = 0;
+        EGLint i;
+
+        if (!eglGetConfigs(display, configs, 128, &total))
+            fail("eglGetConfigs");
+        fprintf(stderr, "configs=%d\n", total);
+        for (i = 0; i < total; i++) {
+            EGLint st = 0, rt = 0, r = 0, g = 0, b = 0, a = 0;
+            eglGetConfigAttrib(display, configs[i], EGL_SURFACE_TYPE, &st);
+            eglGetConfigAttrib(display, configs[i], EGL_RENDERABLE_TYPE, &rt);
+            eglGetConfigAttrib(display, configs[i], EGL_RED_SIZE, &r);
+            eglGetConfigAttrib(display, configs[i], EGL_GREEN_SIZE, &g);
+            eglGetConfigAttrib(display, configs[i], EGL_BLUE_SIZE, &b);
+            eglGetConfigAttrib(display, configs[i], EGL_ALPHA_SIZE, &a);
+            fprintf(stderr, "cfg %2d surface_type=0x%x renderable=0x%x rgba=%d/%d/%d/%d\n",
+                    i, st, rt, r, g, b, a);
+        }
+        return 0;
+    }
+    if (use_window) {
+        if (!eglChooseConfig(display, config_attributes_window, &config, 1, &config_count) ||
+            config_count != 1)
+            fail("eglChooseConfig(window)");
+    } else if (!eglChooseConfig(display, config_attributes, &config, 1, &config_count) || config_count != 1) {
+        fprintf(stderr, "note: RGBA8888 pbuffer config unavailable (count=%d), "
+                "retrying with a lenient config\n", config_count);
+        if (!eglChooseConfig(display, config_attributes_min, &config, 1, &config_count) ||
+            config_count != 1)
+            fail("eglChooseConfig");
+    }
 
     context = eglCreateContext(display, config, EGL_NO_CONTEXT, context_attributes);
     if (context == EGL_NO_CONTEXT)
         fail("eglCreateContext");
 
+    if (use_window) {
+        /* Fullscreen fbdev window; native window handle 0 selects the whole
+           framebuffer on the PVR FRONTWSEGL window system. Override with
+           SGX_NATIVE_WINDOW if a stack needs a different handle. */
+        EGLNativeWindowType win = (EGLNativeWindowType)(long)
+            (getenv("SGX_NATIVE_WINDOW") ? atoi(getenv("SGX_NATIVE_WINDOW")) : 0);
+        surfaces[0] = eglCreateWindowSurface(display, config, win, NULL);
+        surfaces[1] = surfaces[0];
+        if (surfaces[0] == EGL_NO_SURFACE) {
+            fprintf(stderr, "FAIL: eglCreateWindowSurface error=0x%x\n", eglGetError());
+            return 1;
+        }
+    } else {
     surfaces[0] = eglCreatePbufferSurface(display, config, pbuffer_attributes);
     surfaces[1] = eglCreatePbufferSurface(display, config, pbuffer_attributes);
     if (surfaces[0] == EGL_NO_SURFACE || surfaces[1] == EGL_NO_SURFACE) {
         fprintf(stderr, "FAIL: eglCreatePbufferSurface error=0x%x\n", eglGetError());
         return 1;
+    }
     }
 
     if (!eglMakeCurrent(display, surfaces[0], surfaces[0], context))
@@ -363,9 +435,11 @@ int main(int argc, char **argv)
                          start_ns, bound_ns,
                          select_cpu_start_ns, select_cpu_end_ns);
         finish_cpu_start_ns = clock_ns(CLOCK_PROCESS_CPUTIME_ID);
-        glClearColor(index ? 0.125f : 0.5f, 0.25f, 0.5f, 1.0f);
-        glClear(GL_COLOR_BUFFER_BIT);
-        glFinish();
+        if (!skip_render) {
+            glClearColor(index ? 0.125f : 0.5f, 0.25f, 0.5f, 1.0f);
+            glClear(GL_COLOR_BUFFER_BIT);
+            glFinish();
+        }
         finished_ns = monotonic_ns();
         finish_cpu_end_ns = clock_ns(CLOCK_PROCESS_CPUTIME_ID);
         report_slow_call(frame, "clear-finish", bound_ns, finished_ns,
@@ -420,8 +494,9 @@ int main(int argc, char **argv)
         fail("cleanup eglMakeCurrent");
     fputs("cleanup unbind complete\n", stderr);
     fflush(stderr);
-    if (!eglDestroySurface(display, surfaces[1]) ||
-        !eglDestroySurface(display, surfaces[0]))
+    if (surfaces[1] != surfaces[0] && !eglDestroySurface(display, surfaces[1]))
+        fail("eglDestroySurface");
+    if (!eglDestroySurface(display, surfaces[0]))
         fail("eglDestroySurface");
     fputs("cleanup surfaces complete\n", stderr);
     fflush(stderr);

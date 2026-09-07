@@ -1,197 +1,141 @@
 #!/bin/sh
+# DDK 1.6 Stage 0 harness: run the EGL FBO attachment-churn probe on the fixed
+# 1.6 stack (0008 IRQ + 0009 APM) and collect timing / device-memory / dmesg
+# data. This is a *reproducer / data collector*, not a pass-fail gate — the
+# rebind=1 mode is expected to leak device memory and OOM (that is the finding).
+#
+# Proven recipe (2026-09-06), mixed-libc loader isolation:
+#   - modules come from the running kernel's tree (correct vermagic), NOT the
+#     ti-ddk16 tarball (its prebuilt modules are for a different kernel);
+#   - the es2.x GL libs + the 1.6 WSEGL come from GL_ROOT (/root/s16/gl);
+#   - the probe runs under the modern armel libc (/opt/pandora-armel) so its
+#     GLIBC_2.34 symbols resolve while it dlopens the old softfp GL libs.
+#
+# The DDK EGL needs a WSEGL window-system module + /etc/powervr.ini selecting it.
+# soak16/gl ships WITHOUT any WSEGL, so eglInitialize fails until the 1.6 WSEGL
+# (libpvrPVR2D_FLIPWSEGL.so, Version 1.6.16.3977, softfp) is staged into GL_ROOT.
+# Source: beagle-archive/angstrom-sgx-test.tar -> opt/ti-ddk16/runtime/. See
+# tools/README.md. FRONTWSEGL OOMs on dc_nohw's bogus geometry; use FLIPWSEGL.
 set -eu
 
-ROOT=${DDK16_ROOT:-/opt/ti-ddk16}
+KMOD_DIR=${KMOD_DIR:-/lib/modules/$(uname -r)/kernel/drivers/gpu/drm/pvrsgx/1.6.16.3977}
+SERVICES_MODULE=${SERVICES_MODULE:-$KMOD_DIR/pvrsrvkm.ko}
+DC_MODULE=${DC_MODULE:-$KMOD_DIR/services4/3rdparty/dc_nohw/dcnohw.ko}
+GL_ROOT=${GL_ROOT:-/root/s16/gl}
 ARMEL_ROOT=${ARMEL_ROOT:-/opt/pandora-armel}
 PROBE=${SGX_PROBE:-$ARMEL_ROOT/bin/sgx-pbuffer-latency}
-CYCLES=${CYCLES:-5}
-SOAK_SECONDS=${SOAK_SECONDS:-180}
-RESULT_ROOT=${RESULT_ROOT:-/tmp/ddk16-stage0}
+PROBE_LOADER=${PROBE_LOADER:-$ARMEL_ROOT/lib/ld-linux.so.3}
+WSEGL=${WSEGL:-libpvrPVR2D_FLIPWSEGL.so}
+POWERVR_INI=${POWERVR_INI:-/etc/powervr.ini}
+INIT_CMD=${INIT_CMD:-/root/s16/run.sh pvrsrvinit}
+
+FRAMES=${FRAMES:-120}
 PROBE_ALTERNATE=${PROBE_ALTERNATE:-1}
 PROBE_USE_FBO=${PROBE_USE_FBO:-1}
-PROBE_USE_TEXTURE=${PROBE_USE_TEXTURE:-0}
+PROBE_USE_TEXTURE=${PROBE_USE_TEXTURE:-1}
 PROBE_REBIND_ATTACHMENT=${PROBE_REBIND_ATTACHMENT:-1}
-TRACE_SLOW_BRIDGE=${TRACE_SLOW_BRIDGE:-0}
+RESULT_ROOT=${RESULT_ROOT:-/tmp/ddk16-stage0}
 
-SERVICES_MODULE="$ROOT/module/pvrsrvkm.ko"
-DC_MODULE="$ROOT/module/dcnohw.ko"
-INIT_LOADER="$ROOT/lib/ld-linux.so.3"
-INIT_LIBPATH="$ROOT/runtime:$ROOT/lib"
-PROBE_LOADER="$ARMEL_ROOT/lib/ld-linux.so.3"
-PROBE_LIBPATH="$ROOT/runtime:$ARMEL_ROOT/lib"
-FAULT_PATTERN='HWRecovery|BIF|watchdog|Oops|BUG|fault|build-option mismatch'
+PROBE_LIBPATH="$ARMEL_ROOT/lib:$GL_ROOT"
+FAULT_PATTERN='HWRecovery|BIF|watchdog|Oops|BUG:|SGXOSTimeout|LOCK_RESOURCE|Out of memory|Killed process'
 
-fail()
-{
-    echo "FAIL: $*" >&2
-    exit 1
-}
+fail() { echo "FAIL: $*" >&2; exit 1; }
 
 require_positive_integer()
 {
-    name=$1
-    value=$2
-
-    case "$value" in
-        ''|*[!0-9]*|0) fail "$name must be a positive integer" ;;
-    esac
+    case "$2" in ''|*[!0-9]*|0) fail "$1 must be a positive integer" ;; esac
 }
 
 require_boolean()
 {
-    name=$1
-    value=$2
-
-    case "$value" in
-        0|1) ;;
-        *) fail "$name must be 0 or 1" ;;
-    esac
+    case "$2" in 0|1) ;; *) fail "$1 must be 0 or 1" ;; esac
 }
+
+cma_kb() { awk '/^CmaFree:/ { print $2 }' /proc/meminfo; }
+sgx_irq_count() { awk '/SGX ISR/ { print $2; exit }' /proc/interrupts; }
 
 unload_modules()
 {
     rmmod dcnohw 2>/dev/null || true
-    rmmod bufferclass_ti 2>/dev/null || true
-    rmmod omaplfb 2>/dev/null || true
     rmmod pvrsrvkm 2>/dev/null || true
-    rmmod pvrsrvkm_omap3_sgx530_121 2>/dev/null || true
 }
 
+# Fresh module reload + pvrsrvinit. pvrsrvinit only returns 0 right after a
+# clean load; a second run reports "already initialised" (non-zero) which is
+# harmless, so its exit status is ignored here.
 load_stack()
 {
     unload_modules
-    dmesg -C
-    if [ "$TRACE_SLOW_BRIDGE" = 1 ]; then
-        insmod "$SERVICES_MODULE" trace_slow_bridge=1
-    else
-        insmod "$SERVICES_MODULE"
-    fi
-
+    insmod "$SERVICES_MODULE"
     tries=0
     while [ ! -e /dev/pvrsrvkm ] && [ "$tries" -lt 20 ]; do
         sleep 1
         tries=$((tries + 1))
     done
     [ -e /dev/pvrsrvkm ] || fail "pvrsrvkm loaded without /dev/pvrsrvkm"
-    chmod 600 /dev/pvrsrvkm
-
-    timeout 30 "$INIT_LOADER" --library-path "$INIT_LIBPATH" \
-        "$ROOT/runtime/pvrsrvinit"
     insmod "$DC_MODULE"
-
-    grep -q '^dcnohw ' /proc/modules || fail "dcnohw did not load"
-    grep -q '^pvrsrvkm ' /proc/modules || fail "pvrsrvkm did not load"
     grep -qi 'SGX ISR' /proc/interrupts || fail "SGX IRQ is not registered"
-}
-
-run_probe()
-{
-    frames=$1
-    output=$2
-
-    timeout 120 env LD_LIBRARY_PATH="$PROBE_LIBPATH" \
-        "$PROBE_LOADER" --library-path "$PROBE_LIBPATH" \
-        "$PROBE" "$frames" "$PROBE_ALTERNATE" "$PROBE_USE_FBO" \
-        "$PROBE_USE_TEXTURE" > "$output" 2> "$output.stderr"
-
-    grep -q '^egl=1\.4 renderer=PowerVR SGX 530 ' "$output" ||
-        fail "probe did not use the DDK 1.6 SGX renderer"
-    actual_frames=$(awk -F, '$1 ~ /^[0-9]+$/ { count++ } END { print count + 0 }' "$output")
-    [ "$actual_frames" -eq "$frames" ] ||
-        fail "probe produced $actual_frames of $frames frames"
-}
-
-check_kernel_log()
-{
-    output=$1
-
-    dmesg > "$output"
-    if grep -Eiq "$FAULT_PATTERN" "$output"; then
-        grep -Ei "$FAULT_PATTERN" "$output" >&2
-        fail "kernel fault or SGX recovery detected"
-    fi
-}
-
-memory_snapshot()
-{
-    label=$1
-    awk -v label="$label" '
-        /^(MemAvailable|SwapFree|Slab|SReclaimable|SUnreclaim|VmallocUsed):/ {
-            values[$1] = $2
-        }
-        END {
-            printf "%s", label
-            for (key in values)
-                printf ",%s=%s", key, values[key]
-            printf "\n"
-        }
-    ' /proc/meminfo
+    $INIT_CMD >/dev/null 2>&1 || true
 }
 
 [ "$(id -u)" -eq 0 ] || fail "run as root"
-require_positive_integer CYCLES "$CYCLES"
-require_positive_integer SOAK_SECONDS "$SOAK_SECONDS"
+require_positive_integer FRAMES "$FRAMES"
 require_boolean PROBE_ALTERNATE "$PROBE_ALTERNATE"
 require_boolean PROBE_USE_FBO "$PROBE_USE_FBO"
 require_boolean PROBE_USE_TEXTURE "$PROBE_USE_TEXTURE"
 require_boolean PROBE_REBIND_ATTACHMENT "$PROBE_REBIND_ATTACHMENT"
-require_boolean TRACE_SLOW_BRIDGE "$TRACE_SLOW_BRIDGE"
 
-for path in "$SERVICES_MODULE" "$DC_MODULE" "$INIT_LOADER" \
-            "$ROOT/runtime/pvrsrvinit" "$PROBE_LOADER" "$PROBE"; do
+for path in "$SERVICES_MODULE" "$DC_MODULE" "$PROBE_LOADER" "$PROBE"; do
     [ -e "$path" ] || fail "missing required file: $path"
 done
+[ -e "$GL_ROOT/$WSEGL" ] ||
+    fail "$GL_ROOT/$WSEGL missing — stage the 1.6 WSEGL modules (see tools/README.md)"
 
 services_release=$(modinfo -F vermagic "$SERVICES_MODULE" | awk '{print $1}')
-dc_release=$(modinfo -F vermagic "$DC_MODULE" | awk '{print $1}')
 [ "$services_release" = "$(uname -r)" ] ||
     fail "pvrsrvkm is for $services_release, running kernel is $(uname -r)"
-[ "$dc_release" = "$(uname -r)" ] ||
-    fail "dcnohw is for $dc_release, running kernel is $(uname -r)"
+
+[ -e "$POWERVR_INI" ] ||
+    printf '[default]\nWindowSystem=%s\n' "$WSEGL" > "$POWERVR_INI"
 
 mkdir -p "$RESULT_ROOT"
 trap 'unload_modules' EXIT INT TERM HUP
 
-printf 'alternate=%s use_fbo=%s use_texture=%s rebind_attachment=%s\n' \
-    "$PROBE_ALTERNATE" "$PROBE_USE_FBO" "$PROBE_USE_TEXTURE" \
-    "$PROBE_REBIND_ATTACHMENT" \
-    > "$RESULT_ROOT/probe-mode.txt"
-sha256sum "$SERVICES_MODULE" "$DC_MODULE" > "$RESULT_ROOT/module-sha256.txt"
-modinfo "$SERVICES_MODULE" > "$RESULT_ROOT/pvrsrvkm.modinfo"
-modinfo "$DC_MODULE" > "$RESULT_ROOT/dcnohw.modinfo"
 uname -a > "$RESULT_ROOT/uname.txt"
-memory_snapshot before > "$RESULT_ROOT/memory.csv"
+sha256sum "$SERVICES_MODULE" "$DC_MODULE" > "$RESULT_ROOT/module-sha256.txt"
+printf 'frames=%s alternate=%s use_fbo=%s use_texture=%s rebind_attachment=%s wsegl=%s\n' \
+    "$FRAMES" "$PROBE_ALTERNATE" "$PROBE_USE_FBO" "$PROBE_USE_TEXTURE" \
+    "$PROBE_REBIND_ATTACHMENT" "$WSEGL" > "$RESULT_ROOT/probe-mode.txt"
 
-cycle=1
-while [ "$cycle" -le "$CYCLES" ]; do
-    echo "Lifecycle cycle $cycle/$CYCLES"
-    load_stack
-    run_probe 120 "$RESULT_ROOT/cycle-$cycle.csv"
-    check_kernel_log "$RESULT_ROOT/cycle-$cycle.dmesg"
-    unload_modules
-    memory_snapshot "cycle-$cycle" >> "$RESULT_ROOT/memory.csv"
-    cycle=$((cycle + 1))
-done
-
-echo "Soaking for at least $SOAK_SECONDS seconds in one EGL process"
 load_stack
-start=$(date +%s)
-timeout $((SOAK_SECONDS + 120)) env \
-    LD_LIBRARY_PATH="$PROBE_LIBPATH" \
-    SGX_DURATION_SECONDS="$SOAK_SECONDS" SGX_SUMMARY_ONLY=1 \
-    SGX_REBIND_ATTACHMENT="$PROBE_REBIND_ATTACHMENT" \
+dmesg -C
+cma_before=$(cma_kb)
+irq_before=$(sgx_irq_count)
+
+csv="$RESULT_ROOT/stage0.csv"
+err="$RESULT_ROOT/stage0.stderr"
+set +e
+env SGX_REBIND_ATTACHMENT="$PROBE_REBIND_ATTACHMENT" \
     "$PROBE_LOADER" --library-path "$PROBE_LIBPATH" \
-    "$PROBE" 1 "$PROBE_ALTERNATE" "$PROBE_USE_FBO" \
-    "$PROBE_USE_TEXTURE" > "$RESULT_ROOT/soak-summary.txt" \
-    2> "$RESULT_ROOT/soak-stderr.txt"
+    "$PROBE" "$FRAMES" "$PROBE_ALTERNATE" "$PROBE_USE_FBO" \
+    "$PROBE_USE_TEXTURE" > "$csv" 2> "$err"
+rc=$?
+set -e
 
-elapsed=$(($(date +%s) - start))
-memory_snapshot after >> "$RESULT_ROOT/memory.csv"
-check_kernel_log "$RESULT_ROOT/soak-final.dmesg"
-summary=$(grep '^summary ' "$RESULT_ROOT/soak-summary.txt")
-[ -n "$summary" ] || fail "soak probe did not produce a summary"
-slow_frames=$(printf '%s\n' "$summary" | sed -n 's/.* over_500ms=\([0-9][0-9]*\).*/\1/p')
-[ "$slow_frames" = "0" ] || fail "soak contained $slow_frames frames over 500 ms"
+cma_after=$(cma_kb)
+irq_after=$(sgx_irq_count)
+dmesg > "$RESULT_ROOT/stage0.dmesg"
 
-printf 'PASS: cycles=%d soak_seconds=%d %s\n' "$CYCLES" "$elapsed" "$summary"
-echo "Results: $RESULT_ROOT"
+frames_done=$(awk -F, '$1 ~ /^[0-9]+$/ { count++ } END { print count + 0 }' "$csv")
+slow_frames=$(grep -c '^slow ' "$err" 2>/dev/null || true)
+oom=no
+[ "$rc" -eq 137 ] && oom=yes
+faults=$(grep -Eic "$FAULT_PATTERN" "$RESULT_ROOT/stage0.dmesg" 2>/dev/null || true)
+
+summary=$(printf \
+    'rebind=%s frames=%s/%s rc=%s oom=%s cma_consumed_kb=%s irq_delta=%s slow_frames=%s dmesg_faults=%s' \
+    "$PROBE_REBIND_ATTACHMENT" "$frames_done" "$FRAMES" "$rc" "$oom" \
+    "$((cma_before - cma_after))" "$((irq_after - irq_before))" \
+    "${slow_frames:-0}" "${faults:-0}")
+printf '%s\n' "$summary" | tee "$RESULT_ROOT/stage0-summary.txt"
+echo "Results: $RESULT_ROOT (stage0.csv, stage0.stderr, stage0.dmesg)"
