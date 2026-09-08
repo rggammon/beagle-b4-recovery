@@ -28,9 +28,10 @@ KMS/display investigation is in [BTT HDMI7 and OMAP DRM notes](btt-hdmi7-omapdrm
 
 ## Current Status
 
-**Active stage:** Stage 0 baseline is solid (stall, power-lock, and the item #7
-"leak" all resolved; CMA stress does not reproduce). Stage 1 (EGL window surface
-on `dc_nohw`) is next.
+**Active stage:** Stage 0 baseline is **passed** (stall, power-lock, and the
+item #7 "leak" all resolved; CMA stress does not reproduce; the 100k-frame
+real-geometry soak is clean at native parity). Stage 1 (EGL window surface on
+`dc_nohw`) is next.
 
 **Original Stage 0 baseline:** passed for DDK 1.6 and, independently, DDK 1.4.
 
@@ -70,13 +71,20 @@ single `HWRecoveryResetSGX` fired during teardown with **all BIF fault registers
 zero** (`EUR_CR_BIF_FAULT: 00000000`) — the benign idle/teardown watchdog
 artifact, not a memory fault like the historical `0x0F0AB000`.
 
-**Remaining before Stage 1.** Re-run the long real-geometry soak
-(`sgx_render_flip_test`, triangle + flips, ~100k frames) on `ge2b9d0eea907` to
-confirm the earlier "2 recoveries + 2 frames over 500 ms across ~97k frames"
-report clears on the fixed kernel. Stage 1 itself is gated only on building an
-EGL **window** surface against `dc_nohw` and exercising the DisplayClass
-swapchain — neither stack has done that yet (the pbuffer benchmark registered
-`dc_nohw` but never created a window surface).
+**Long real-geometry soak (Devuan, `ge2b9d0eea907`).** `sgx_render_flip_test
+-nf -f 100000 -ser 1 -tpf 100` ran **all 100,000 serialized frames, `RC=0`**, at
+a **28.6 ms/frame mean (native parity;** native Ångström was 27–32 ms). **Zero
+`TIMEOUT (retrying)`** (the IRQ stall stays fixed), **zero `HWRecovery` / BIF
+fault / OOM** in dmesg, and `MemFree`/`CmaFree` flat across the ~47-minute run.
+This clears the earlier "2 recoveries + 2 frames over 500 ms across ~97k frames"
+report — the recovery and stall failures are gone on the fixed kernel. (This
+harness reports the frame mean, not a per-frame max; the absence of any recovery
+or completion timeout is the pass signal.)
+
+**Stage 0 is closed.** Stage 1 is gated only on building an EGL **window**
+surface against `dc_nohw` and exercising the DisplayClass swapchain — neither
+stack has done that yet (the pbuffer benchmark registered `dc_nohw` but never
+created a window surface).
 
 ## Handoff Card
 
@@ -181,14 +189,14 @@ per accepted command, including controlled shutdown and error paths.
 
 ## Stage 0: Stable Rendering Baseline
 
-**Status: baseline solid; one real-geometry re-verification pending.** The
-release DDK initializes, `dc_nohw` registers, the alternating-FBO test completes
-without stalls or recovery, and the extended CMA stress soak (98,855 frames,
-zero over 500 ms, `CmaFree` flat, no OOM) does **not** reproduce the historical
-exhaustion. The module-unload stall and the item #7 "leak" are resolved. The
-only open Stage 0 item is re-running the long real-geometry soak
-(`sgx_render_flip_test`) on `ge2b9d0eea907` to confirm the earlier recovery /
-latency report clears on the fixed kernel.
+**Status: PASSED.** The release DDK initializes, `dc_nohw` registers, the
+alternating-FBO test completes without stalls or recovery, and the extended CMA
+stress soak (98,855 frames, zero over 500 ms, `CmaFree` flat, no OOM) does
+**not** reproduce the historical exhaustion. The module-unload stall and the
+item #7 "leak" are resolved. The long real-geometry soak
+(`sgx_render_flip_test -nf -f 100000 -ser 1`) then ran all **100,000 frames,
+`RC=0`, 28.6 ms/frame mean (native parity), zero completion timeouts, zero
+HWRecovery/BIF fault/OOM** — clearing the earlier recovery/latency report.
 
 ### Preserve Reviewable Checkpoints
 
