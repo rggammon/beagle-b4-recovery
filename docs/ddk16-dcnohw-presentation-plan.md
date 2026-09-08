@@ -28,11 +28,12 @@ KMS/display investigation is in [BTT HDMI7 and OMAP DRM notes](btt-hdmi7-omapdrm
 
 ## Current Status
 
-**Active stage:** Stage 2 (DMA-BUF export) **core validated** — the
-`dc_nohw` back buffers export as DMA-BUF FDs and `mmap` readback shows the exact
-rendered pixels; leak-free with a working unload guard. Stage 3 (KMS import +
-CPU-pattern scanout via `omapdrm`) is next. Stage 1 window surface remains
-functionally passing (swapchain allocation + `eglSwapBuffers` cycling).
+**Active stage:** Stage 3 (KMS import + CPU-pattern scanout). The display is
+ready — `omapdrm` KMS, `DVI-D-1` connected at 1024x600 (exact `dc_nohw`
+geometry), `/dev/fb0` is omapdrm's own `drmfb`. Stage 2 (DMA-BUF export) is
+**core validated** (export + `mmap` readback shows the exact rendered pixels,
+leak-free, working unload guard); Stage 1 window surface remains functionally
+passing.
 
 **Original Stage 0 baseline:** passed for DDK 1.6 and, independently, DDK 1.4.
 
@@ -464,16 +465,76 @@ buffers, export each, `mmap`, and checksum the pixels while the Stage 1 probe
 drives `eglSwapBuffers`, confirming the mapped contents change per swap. No KMS
 yet — this isolates DMA-BUF identity, page mapping, and lifetime.
 
-## Later Stages (3–8)
+## Stage 3: KMS Import and CPU-Pattern Scanout
 
-**Gated on Stage 2.** KMS import, synchronous and fenced GLES presentation,
-application validation, and packaging remain in the satellite so this plan stays
-focused on the active stage:
+**Status: next.** Put pixels on the B4 display for the first time. A hard-float
+presenter imports a DMA-BUF into `omapdrm`, wraps a DRM framebuffer, and drives
+KMS scanout — filled by the **CPU** (colour bars), not SGX. This isolates the
+display path (import, format, stride, mode set, flip) from the renderer.
 
-- [Presentation later stages (3–8)](ddk16-presentation-stages-3-8.md) — Stage 3
-  KMS/CPU-pattern scanout, Stage 4 synchronous GLES presentation, Stage 5
-  explicit fences, Stage 6 implicit sync, Stage 7 application validation
-  (OpenQuartz/game), Stage 8 packaging.
+### Confirmed display state (B4)
+
+- `omapdrm` KMS is loaded; `/dev/dri/card0` present; `/dev/fb0` is omapdrm's own
+  `drmfb` emulation (no competing `omapfb`).
+- Connector **`DVI-D-1` is connected at `1024x600`** — the exact `dc_nohw`
+  buffer geometry (ARGB8888, stride 4096). A sink is attached, so output is
+  observable.
+- OMAP3 DISPC scans out physically contiguous memory (no IOMMU/TILER); the
+  Stage 2 contiguous-CMA buffers satisfy this directly.
+- The board has `libdrm.so.2` but no dev headers, `modetest`, or compiler, so the
+  presenter is cross-built hard-float (`arm-linux-gnueabihf`) using **raw DRM
+  UAPI ioctls** — no libdrm link dependency.
+
+### Phase 3A: KMS bring-up with a dumb buffer
+
+Prove the display pipeline independently of `dc_nohw`. Use
+`DRM_IOCTL_MODE_CREATE_DUMB` + `MAP_DUMB`, CPU-fill colour bars, `ADDFB2`
+(ARGB8888), and `MODE_SETCRTC` on the `DVI-D-1` CRTC at 1024x600. Legacy
+`SetCrtc` first; atomic KMS can come later.
+
+Pass criteria:
+
+- The presenter becomes DRM master (yielding the `drmfb` console) and sets the
+  mode without error.
+- Correct colour bars appear on the DVI-D display.
+- Clean teardown; no kernel warning or hang.
+
+### Phase 3B: Import and scan out a `dc_nohw` buffer
+
+Open `/dev/dc_nohw_export`, `EXPORT_BUFFER` → DMA-BUF FD, import with
+`DRM_IOCTL_PRIME_FD_TO_HANDLE`, `ADDFB2` over the imported handle, CPU-fill
+colour bars through the buffer's `mmap`, and `SetCrtc`. This is the first
+zero-copy path: the same contiguous CMA pages the SGX renderer will later write
+are scanned out by DISPC.
+
+Pass criteria:
+
+- `PRIME_FD_TO_HANDLE` imports the buffer and `ADDFB2` accepts it for scanout
+  (the key `omapdrm` import risk to retire).
+- CPU-written colour bars in the imported buffer appear on screen.
+- Double-buffer flips (`PAGE_FLIP` between two exported buffers) run at the
+  display cadence.
+- Presenter exit restores the console; no use-after-free, leak, or corruption.
+
+### Scope notes
+
+- **Self-contained:** Stage 3 needs no SGX and no renderer process. The
+  `SOCK_SEQPACKET`/`SCM_RIGHTS` FD hand-off is deferred to Stage 4, where the
+  soft-float EGL renderer owns the session and the presenter owns scanout.
+- **Master coordination:** the presenter takes DRM master; do not run an EGL
+  window session on `fb0` at the same time (Stage 4 keeps the renderer offscreen
+  in the `dc_nohw` buffers while the presenter owns the display).
+- Tool: `tools/dc_nohw_kms_present.c` (hard-float, raw ioctls).
+
+## Later Stages (4–8)
+
+**Gated on Stage 3.** Synchronous and fenced GLES presentation, application
+validation, and packaging remain in the satellite so this plan stays focused on
+the active stage:
+
+- [Presentation later stages (4–8)](ddk16-presentation-stages-4-8.md) — Stage 4
+  synchronous GLES presentation, Stage 5 explicit fences, Stage 6 implicit sync,
+  Stage 7 application validation (OpenQuartz/game), Stage 8 packaging.
 
 The architecture, ownership invariant, buffer-state protocol, and engineering rules
 below apply throughout those stages.
@@ -497,18 +558,18 @@ below apply throughout those stages.
 
 ## Immediate Next Actions
 
-1. Add an in-`dc_nohw` enumeration API over `DC_NOHW_SWAPCHAIN.asBackBuffers[]`
-   (index, size, queried dimensions) — this doubles as the formal Stage 1
-   buffer-set confirmation.
-2. Add the `dc_nohw_export` miscdevice with `QUERY_ABI` / `ENUM_BUFFERS` /
-   `EXPORT_BUFFER` / `QUERY_BUFFER` ioctls in a separate reviewable commit.
-3. Implement `dma_buf_ops` over an `sg_table` built from `vmalloc_to_page()`,
-   with per-buffer refcount and a module unload-guard.
-4. Add a `dc_nohw_export` userspace smoke: enumerate, export, `mmap`, checksum
-   pixels while the Stage 1 probe swaps.
-5. Run Stage 2 on the B4; confirm the mapped FD shows the rendered pixels and
-   memory stays flat across export/close cycles.
-6. Checkpoint the passing Stage 2 exporter before beginning Stage 3 KMS import.
+1. Write `tools/dc_nohw_kms_present.c` (hard-float, raw DRM ioctls): enumerate
+   resources, find the `DVI-D-1` connector/CRTC, become DRM master.
+2. Phase 3A: dumb-buffer colour bars via `CREATE_DUMB` + `MAP_DUMB` + `ADDFB2` +
+   `MODE_SETCRTC` at 1024x600 — prove the display pipeline.
+3. Phase 3B: `EXPORT_BUFFER` from `/dev/dc_nohw_export`, `PRIME_FD_TO_HANDLE`,
+   `ADDFB2` over the imported handle, CPU-fill via `mmap`, `SetCrtc` — retire the
+   `omapdrm` import risk.
+4. Add `PAGE_FLIP` double-buffering between two exported buffers at the display
+   cadence; confirm clean teardown restores the console.
+5. Run Stage 3 on the B4; capture whether bars appear and any dmesg warnings.
+6. Checkpoint the passing Stage 3 presenter before beginning Stage 4 (connect
+   the SGX renderer via the `SCM_RIGHTS` FD hand-off).
 
 ## Explicit Non-Goals
 

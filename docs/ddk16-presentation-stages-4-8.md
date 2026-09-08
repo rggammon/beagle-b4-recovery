@@ -1,32 +1,12 @@
-# OMAP3 SGX103 DDK 1.6 Presentation — Later Stages (3–8)
+# OMAP3 SGX103 DDK 1.6 Presentation — Later Stages (4–8)
 
 Satellite of the [DDK 1.6 `dc_nohw` presentation plan](ddk16-dcnohw-presentation-plan.md).
 
-These stages are **gated on Stage 2** — a working DMA-BUF export of the
-`dc_nohw` swapchain buffers (Stage 1 window surface and Stage 2 export both live
-in the main plan). They are kept out of the main plan so it stays focused on the
-active stage. The architecture (DisplayClass boundary, ownership invariant,
-buffer-state protocol), Handoff Card, and engineering rules live in the main plan
-and apply throughout.
-
-## Stage 3: KMS Import and CPU-Pattern Scanout
-
-Build a hard-float presenter that receives DMA-BUF FDs over
-`SOCK_SEQPACKET`/`SCM_RIGHTS`, imports them into `omapdrm`, creates DRM
-framebuffers, and owns all atomic KMS state.
-
-Begin with CPU-generated color bars, not SGX rendering. This isolates DMA-BUF
-layout, cache transitions, GEM import, format, stride, mode setting, and page
-flip behavior.
-
-### Pass Criteria
-
-- `drmPrimeFDToHandle` imports every buffer.
-- The chosen DRM format and stride display correct color bars.
-- Double-buffer atomic flips run at the expected display cadence.
-- Renderer and presenter can exit independently without stale scanout or leaked
-  attachments.
-- No kernel warning, use-after-free, or display corruption occurs.
+These stages are **gated on Stage 3** — a working KMS presenter that scans a
+`dc_nohw` DMA-BUF out on the B4 display (Stages 1–3 live in the main plan). They
+are kept out of the main plan so it stays focused on the active stage. The
+architecture (DisplayClass boundary, ownership invariant, buffer-state protocol),
+Handoff Card, and engineering rules live in the main plan and apply throughout.
 
 ## Stage 4: Synchronous GLES Presentation
 
