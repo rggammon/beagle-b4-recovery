@@ -381,18 +381,23 @@ only on Stage 1 Phase 1A (stable buffers by index).
 
 ### What `dc_nohw` actually provides
 
-Confirmed from the built module (`DC_NOHW_DISCONTIG_BUFFERS` +
-`DC_NOHW_GET_BUFFER_DIMENSIONS` in its `Kbuild`):
+`dc_nohw` was switched to **contiguous CMA** buffers as Stage 2 groundwork
+(openpvrsgx commit `6418c37f`), because the OMAP3 DISPC has no IOMMU/TILER and
+can only scan out physically contiguous memory — so zero-copy scanout (Stage 3)
+requires it, and it makes the exporter trivial:
 
 - The swapchain owns a system buffer plus up to `DC_NOHW_MAX_BACKBUFFERS` (3)
   back buffers in `DC_NOHW_SWAPCHAIN.asBackBuffers[]`, each a `DC_NOHW_BUFFER`
-  with a known `ui32BufferSize`.
-- Each buffer is backed by **discontiguous, non-cached `vmalloc` memory**
-  (`__vmalloc_node_range(..., pgprot_noncached, ...)`), with a per-page physical
-  array built via `vmalloc_to_page()`. There is no single contiguous DMA
-  address — the exporter must describe the buffer page-by-page.
-- Buffer width/height/stride are queryable (the `GET_BUFFER_DIMENSIONS` build
-  option), so the exporter publishes geometry without guessing.
+  with a known `ui32BufferSize` and a single `sSysAddr` (physical address).
+- Each buffer is now **physically contiguous, non-cached CMA** memory
+  (`dma_alloc_coherent()` against a synthetic `platform_device` with a 32-bit
+  mask, pulling from the global `cma=48M`). `DC_NOHW_DISCONTIG_BUFFERS` is
+  removed. There is a single DMA address per buffer.
+- Pixel format is `PVRSRV_PIXEL_FORMAT_ARGB8888` → `DRM_FORMAT_ARGB8888`;
+  width/height/stride are queryable (`GET_BUFFER_DIMENSIONS`), so the exporter
+  publishes geometry without guessing.
+- Validated on the B4: Stage 1 1A+1B still pass (1,750 swaps, ~133 fps), ~7 MB
+  of CMA consumed and fully returned on unload (no leak).
 
 ### Initial UAPI
 
@@ -414,16 +419,17 @@ mirror diagnostics but is not the FD-export path.
 
 - Add exporter state and per-buffer reference counting keyed by the
   `DC_NOHW_BUFFER`.
-- Build an `sg_table` from each buffer's pages via `vmalloc_to_page()` over
-  `ui32BufferSize` (one entry per page, coalescing physically adjacent pages).
+- Build the `sg_table` with `dma_get_sgtable()` from each buffer's coherent
+  allocation (a single contiguous entry), and implement `mmap` with
+  `dma_mmap_coherent()`.
 - Implement `attach`, `detach`, `map_dma_buf`, `unmap_dma_buf`,
   `begin/end_cpu_access`, `mmap`, and `release` for the current kernel's
-  `dma_buf_ops`. The backing is already **non-cached**, so CPU-access cache
-  maintenance is minimal — but the importer's mapping attributes must match
+  `dma_buf_ops`. The backing is already **non-cached coherent**, so CPU-access
+  cache maintenance is minimal — but the importer's mapping attributes must match
   (write-combine / non-cached) to avoid ARMv7 mismatched-attribute aliasing.
 - Publish DRM format, width, height, stride, and allocation size explicitly from
   the queried dimensions.
-- Keep the backing `vmalloc` alive until Services, every DMA-BUF, attachment,
+- Keep the backing allocation alive until Services, every DMA-BUF, attachment,
   imported framebuffer, and scanout reference is gone (the Ownership Invariant).
 - Reject module unload while any export remains.
 
