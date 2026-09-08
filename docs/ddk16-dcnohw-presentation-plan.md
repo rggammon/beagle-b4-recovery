@@ -28,12 +28,11 @@ KMS/display investigation is in [BTT HDMI7 and OMAP DRM notes](btt-hdmi7-omapdrm
 
 ## Current Status
 
-**Active stage:** Stage 3 (KMS import + CPU-pattern scanout). The display is
-ready — `omapdrm` KMS, `DVI-D-1` connected at 1024x600 (exact `dc_nohw`
-geometry), `/dev/fb0` is omapdrm's own `drmfb`. Stage 2 (DMA-BUF export) is
-**core validated** (export + `mmap` readback shows the exact rendered pixels,
-leak-free, working unload guard); Stage 1 window surface remains functionally
-passing.
+**Active stage:** Stage 3 (KMS import + CPU-pattern scanout) **core validated** —
+the hard-float presenter imports a `dc_nohw` DMA-BUF into `omapdrm`
+(`PRIME_FD_TO_HANDLE` + `ADDFB2`) and scans it out on `DVI-D-1` at 1024x600 with
+CPU colour bars. Remaining Stage 3: eyes-on confirmation + a `PAGE_FLIP` cadence
+check. Stages 1 (window surface) and 2 (DMA-BUF export) remain validated.
 
 **Original Stage 0 baseline:** passed for DDK 1.6 and, independently, DDK 1.4.
 
@@ -467,10 +466,28 @@ yet — this isolates DMA-BUF identity, page mapping, and lifetime.
 
 ## Stage 3: KMS Import and CPU-Pattern Scanout
 
-**Status: next.** Put pixels on the B4 display for the first time. A hard-float
+**Status: core validated (import + scanout); visual confirmation + page-flip
+pending.** Put pixels on the B4 display for the first time. A hard-float
 presenter imports a DMA-BUF into `omapdrm`, wraps a DRM framebuffer, and drives
 KMS scanout — filled by the **CPU** (colour bars), not SGX. This isolates the
 display path (import, format, stride, mode set, flip) from the renderer.
+
+**Results (2026-09-08, `tools/dc_nohw_kms_present.c`, hard-float raw ioctls):**
+
+- **3A** — dumb buffer: found connector 57 (`DVI-D-1`), CRTC 58, mode 1024x600;
+  `CREATE_DUMB` + colour bars + `ADDFB2` (`fb_id`) + `SETCRTC` all succeeded,
+  clean teardown, no DRM/DISPC errors.
+- **3B** — import: `EXPORT_BUFFER` → DMA-BUF FD, **`PRIME_FD_TO_HANDLE` imported
+  it into `omapdrm`** (GEM handle), **`ADDFB2` accepted the imported contiguous
+  buffer** (1024x600, stride 4096, ARGB8888), and **`SETCRTC` scanned it out** —
+  clean, no faults. The zero-copy path (the SGX render target scanned by DISPC)
+  is proven at the software level.
+- The only i2c noise is "Arbitration lost" on the DVI **DDC/EDID** bus (i2c-2),
+  only during the connector probe, non-fatal — the mode comes from the `video=`
+  cmdline. The connector stays `connected`.
+- **Open:** eyes-on confirmation of the bars on the physical monitor, and the
+  `PAGE_FLIP` double-buffer cadence check (deferred — flips are driven by the
+  renderer in Stage 4 anyway).
 
 ### Confirmed display state (B4)
 
