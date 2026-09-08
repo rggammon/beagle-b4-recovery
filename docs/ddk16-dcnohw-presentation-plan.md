@@ -28,10 +28,10 @@ KMS/display investigation is in [BTT HDMI7 and OMAP DRM notes](btt-hdmi7-omapdrm
 
 ## Current Status
 
-**Active stage:** Stage 0 baseline is **passed** (stall, power-lock, and the
-item #7 "leak" all resolved; CMA stress does not reproduce; the 100k-frame
-real-geometry soak is clean at native parity). Stage 1 (EGL window surface on
-`dc_nohw`) is next.
+**Active stage:** Stage 1 window surface is **functionally passing** — the
+`dc_nohw` swapchain allocates (1A) and `eglSwapBuffers` cycles cleanly (1B,
+18k-swap soak, flat memory). Remaining Stage 1 work is the bounded kernel
+instrumentation to formally prove buffer rotation and exactly-once completion.
 
 **Original Stage 0 baseline:** passed for DDK 1.6 and, independently, DDK 1.4.
 
@@ -249,7 +249,8 @@ benchmark. The probe must:
   memory.
 - Request two 1024x600 32-bit window buffers initially.
 - Render an unmistakably changing color or simple rotating cube.
-- Call `eglSwapBuffers` repeatedly and close cleanly.
+- In Phase 1A (`SGX_SWAP=0`) prove swapchain allocation with no swap; in Phase
+  1B call `eglSwapBuffers` repeatedly and close cleanly.
 - Remain separate from DMA-BUF export and KMS presentation.
 
 ### Instrumentation Contract
@@ -307,31 +308,67 @@ swapchain directly.
 
 ## Stage 1: Headless EGL Window Surface
 
-**Status: next.** Prove that a real DDK 1.6 EGL window surface uses the known
-`dc_nohw` swapchain buffers and completes swaps correctly without presentation.
+**Status: 1A and 1B functionally passing; kernel instrumentation pending.** A
+real DDK 1.6 EGL window surface owns the known `dc_nohw` swapchain buffers,
+split into two separable phases so a failure in one does not mask the other.
+Both phases are driven by the dedicated probe `tools/sgx-window-swap.c` (no FBO,
+no pbuffer, no presentation). Creating a window surface already forces WSEGL to
+allocate the DisplayClass swapchain, so **allocation** and **swap cycling** are
+independent and are proven separately.
 
-### Implementation
+**Results (2026-09-07, Devuan `ge2b9d0eea907`, FLIPWSEGL, native handle 0):**
 
-- Add the bounded instrumentation defined by Stage 0.
-- Add a dedicated GLES2 window-surface test program.
-- Create two swapchain buffers at 1024x600x32.
-- Render a changing pattern or rotating cube and call `eglSwapBuffers`.
-- Run repeated create/render/destroy cycles.
+- **1A** — `eglCreateWindowSurface` succeeds on `dc_nohw`; surface reports
+  1024x600; renderer `PowerVR SGX 530`, DDK `1.6.16.3977`. Five create/destroy
+  cycles, `RC=0`, memory flat, dmesg clean.
+- **1B** — `eglSwapBuffers` completes on the no-hardware display class. A 5-cycle
+  × 30-second soak ran **18,754 swaps, `RC=0`**, avg 7.5 ms/swap (~133 fps),
+  `over_500ms=0`, and **memory pinned flat** (MemFree 36,348 kB / CmaFree
+  27,408 kB) across all five create/destroy cycles — no per-swap leak, no fault
+  or recovery. A `SGX_TRIANGLE=1 SGX_DEPTH=1` variant (shader compile/link, VBO,
+  depth buffer, `glDrawArrays`) also renders and swaps cleanly.
+- **Still open:** the *formal* 1B proofs — `SwapToDCBuffer` monotonic buffer
+  rotation and exactly-once command completion — need the kernel-side
+  instrumentation below. The functional soak (18k swaps, no hang, flat memory)
+  strongly implies both, but the counters make it explicit.
 
-### Pass Criteria
+### Phase 1A: Swapchain Allocation (no swap)
 
-- EGL creates a window surface and a two-buffer DisplayClass swapchain.
-- `GetDCBuffers` exposes only the bounded known `DC_NOHW_BUFFER` set.
-- `SwapToDCBuffer` alternates through that set with monotonic sequences.
+Run the probe with `SGX_SWAP=0`: create the window surface, make it current,
+render one frame, `glFinish`, destroy, and repeat the create/destroy cycle at
+least five times. No `eglSwapBuffers`.
+
+Pass criteria:
+
+- `eglCreateWindowSurface` succeeds against `dc_nohw` (native handle 0,
+  FLIPWSEGL) and reports the requested 1024x600 geometry.
+- `CreateDCSwapChain` + `GetDCBuffers` expose only the bounded known
+  `DC_NOHW_BUFFER` set (two 32-bit buffers).
+- Repeated create/destroy cycles leave memory flat with no recovery, fault,
+  Oops, BUG, or pbuffer regression.
+
+### Phase 1B: Swap Cycling
+
+Only after 1A passes. Default `SGX_SWAP=1`: drive `eglSwapBuffers` repeatedly so
+`SwapToDCBuffer` rotates through the buffer set and each swap command completes.
+
+Pass criteria:
+
+- `SwapToDCBuffer` alternates through the bounded set with monotonic sequences.
 - Every accepted swap command is completed exactly once.
-- The renderer runs for at least 60 seconds and exits cleanly repeatedly.
+- The probe swaps for at least 60 seconds and exits cleanly, repeatedly.
 - No memory growth, recovery, fault, Oops, BUG, or pbuffer regression occurs.
 
 ### Failure Boundary
 
-Do not begin DMA-BUF work if Stage 1 requires proprietary EGL inspection,
-produces ambiguous buffer identity, or cannot establish exact command
-completion. Resolve the open DisplayClass behavior first.
+Use the bounded Stage 0 instrumentation (`CreateDCSwapChain`, `GetDCBuffers`,
+`SwapToDCBuffer`, `DestroyDCSwapChain`, command-completion). Do not begin
+DMA-BUF work if Phase 1A requires proprietary EGL inspection or produces
+ambiguous buffer identity — that must be resolved first. **Phase 1B may be
+deferred or reordered relative to export:** DMA-BUF export (Stage 2) depends on
+1A allocation (stable buffers by index), not on 1B swap cycling. If swap
+completion on the no-hardware display class proves problematic, move export
+ahead and revisit swap cycling under the KMS presenter.
 
 ## Later Stages (2–8)
 

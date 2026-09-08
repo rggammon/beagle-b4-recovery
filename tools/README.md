@@ -56,6 +56,7 @@ The harness writes `powervr.ini` and checks `GL_ROOT/$WSEGL` for you.
 | `test-sgx-ddk14.sh`        | Same, for the DDK 1.4 rollback baseline.                                                                                                                                                                       |
 | `test-sgx-ddk16-matrix.sh` | Sweeps probe parameters (alternate / fbo / texture / rebind).                                                                                                                                                  |
 | `sgx-pbuffer-latency.c`    | The Stage 0 probe: two alternating pbuffers, per-frame FBO attachment rebind, `glClear`/`glFinish`; reports `over_500ms` and max latency.                                                                      |
+| `sgx-window-swap.c`        | The Stage 1 probe: real EGL **window** surface on the `dc_nohw` swapchain. `SGX_SWAP=0` = Phase 1A allocation-only (render + `glFinish`, no swap); default = Phase 1B `eglSwapBuffers` cycling. `SGX_TRIANGLE=1`/`SGX_DEPTH=1` add shaders/VBO/depth. No FBO, no pbuffer, no presentation. |
 | `sgx-render-test.c`        | Surfaceless FBO → renderbuffer → clear → `glReadPixels` (pixel-readback correctness).                                                                                                                          |
 | `pvr2d-latency.c`          | PVR2D blit latency probe.                                                                                                                                                                                      |
 | `run-angstrom-sgx-test.sh` | Native Angstrom vendor-stack control (baseline comparison).                                                                                                                                                    |
@@ -110,6 +111,31 @@ $CC -nostdlib -Wl,--dynamic-linker=/lib/ld-linux.so.3 -Wl,--no-as-needed -o prob
 - `SGX_DUMP_CONFIGS=1`: dump every EGL config's `surface_type`/`renderable`/rgba
   and exit (diagnose missing pbuffer/ES2 configs).
 - `SGX_DURATION_SECONDS`, `SGX_SUMMARY_ONLY`: time-bounded run / one-line summary.
+
+### Stage 1 window-surface probe (`sgx-window-swap.c`)
+
+Same softfp cross-build and loader-isolation as above (built on geoduck with
+`arm-linux-gnueabi-gcc-14 -O2 -Wall -Wextra -Werror ... -ldl`, run under the
+`pandora-armel` loader with the 1.6 GL libs). Requires `dcnohw.ko` loaded,
+`pvrsrvinit` run after a fresh insmod, and `powervr.ini` = `FLIPWSEGL`.
+
+```sh
+# Phase 1A: swapchain allocation only (no swap), 5 create/destroy cycles
+SGX_SWAP=0 /opt/pandora-armel/lib/ld-linux.so.3 \
+  --library-path /opt/pandora-armel/lib:/root/s16/gl \
+  /opt/pandora-armel/bin/sgx-window-swap 30 5
+
+# Phase 1B: swap cycling soak (5 cycles x 30s), one-line summary
+SGX_SUMMARY_ONLY=1 SGX_DURATION_SECONDS=30 /opt/pandora-armel/lib/ld-linux.so.3 \
+  --library-path /opt/pandora-armel/lib:/root/s16/gl \
+  /opt/pandora-armel/bin/sgx-window-swap 999999 5
+```
+
+Args: `frames_per_cycle [cycles]` (frames ignored when `SGX_DURATION_SECONDS`
+set). Flags: `SGX_SWAP` (default 1), `SGX_TRIANGLE`, `SGX_DEPTH`,
+`SGX_NATIVE_WINDOW` (default 0), `SGX_SUMMARY_ONLY`, `SGX_DURATION_SECONDS`.
+Reports `swaps`, `average_swap_us`, `max_swap_us`, `over_500ms`, and the
+per-cycle surface geometry.
 
 ## Running Stage 0 (DDK 1.6)
 
