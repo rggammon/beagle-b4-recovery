@@ -327,7 +327,7 @@ independent and are proven separately.
   27,408 kB) across all five create/destroy cycles — no per-swap leak, no fault
   or recovery. A `SGX_TRIANGLE=1 SGX_DEPTH=1` variant (shader compile/link, VBO,
   depth buffer, `glDrawArrays`) also renders and swaps cleanly.
-- **Still open:** the *formal* 1B proofs — `SwapToDCBuffer` monotonic buffer
+- **Still open:** the _formal_ 1B proofs — `SwapToDCBuffer` monotonic buffer
   rotation and exactly-once command completion — need the kernel-side
   instrumentation below. The functional soak (18k swaps, no hang, flat memory)
   strongly implies both, but the counters make it explicit.
