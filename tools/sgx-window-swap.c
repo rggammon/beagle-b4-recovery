@@ -409,9 +409,18 @@ int main(int argc, char **argv)
                 glUniform1f(loc_t, phase);
                 glDrawArrays(GL_TRIANGLES, 0, 3);
             } else {
-                glClearColor(0.5f + 0.5f * (float)((frame >> 0) & 1),
-                             0.5f + 0.5f * (float)((frame >> 1) & 1),
-                             0.5f + 0.5f * (float)((frame >> 2) & 1), 1.0f);
+                const char *clear_env = getenv("SGX_CLEAR");
+                if (clear_env != NULL) {
+                    unsigned long c = strtoul(clear_env, NULL, 0);
+                    glClearColor(((c >> 16) & 0xff) / 255.0f,
+                                 ((c >> 8) & 0xff) / 255.0f,
+                                 (c & 0xff) / 255.0f,
+                                 ((c >> 24) & 0xff) / 255.0f);
+                } else {
+                    glClearColor(0.5f + 0.5f * (float)((frame >> 0) & 1),
+                                 0.5f + 0.5f * (float)((frame >> 1) & 1),
+                                 0.5f + 0.5f * (float)((frame >> 2) & 1), 1.0f);
+                }
                 glClear(GL_COLOR_BUFFER_BIT | (use_depth ? GL_DEPTH_BUFFER_BIT : 0));
             }
 

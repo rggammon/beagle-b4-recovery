@@ -28,11 +28,11 @@ KMS/display investigation is in [BTT HDMI7 and OMAP DRM notes](btt-hdmi7-omapdrm
 
 ## Current Status
 
-**Active stage:** Stage 2 (DMA-BUF export). Stage 1 window surface is
-**functionally passing** — the `dc_nohw` swapchain allocates (1A) and
-`eglSwapBuffers` cycles cleanly (1B, 18k-swap soak, flat memory). The formal 1B
-proofs (buffer rotation, exactly-once completion) are folded into the Stage 2
-exporter, which must read the same `dc_nohw` buffer table.
+**Active stage:** Stage 2 (DMA-BUF export) **core validated** — the
+`dc_nohw` back buffers export as DMA-BUF FDs and `mmap` readback shows the exact
+rendered pixels; leak-free with a working unload guard. Stage 3 (KMS import +
+CPU-pattern scanout via `omapdrm`) is next. Stage 1 window surface remains
+functionally passing (swapchain allocation + `eglSwapBuffers` cycling).
 
 **Original Stage 0 baseline:** passed for DDK 1.6 and, independently, DDK 1.4.
 
@@ -373,11 +373,23 @@ ahead and revisit swap cycling under the KMS presenter.
 
 ## Stage 2: DMA-BUF Export
 
-**Status: active.** Export a known `dc_nohw` swapchain buffer — the same
+**Status: core validated.** Export a known `dc_nohw` swapchain buffer — the same
 `DC_NOHW_BUFFER` that Stage 1 allocates and swaps — as a Linux DMA-BUF FD through
 a narrow open control interface. This is the bridge out of the closed Services
 world toward KMS scanout, and it needs no SGX rendering to validate. It depends
 only on Stage 1 Phase 1A (stable buffers by index).
+
+**Results (2026-09-07, openpvrsgx commit `7f52bc9b`, tool
+`tools/dc_nohw_export_test.c`):** `/dev/dc_nohw_export` (miscdevice) exposes
+`QUERY_ABI` (returned 1024×600, stride 4096, `fourcc 0x34325241` = ARGB8888,
+3 buffers, 2,457,600 B) and `EXPORT_BUFFER(index)` → a DMA-BUF FD. After the
+Stage 1 probe rendered a solid `0xff3366cc`, the test `mmap`ed the exported FD
+and read back **`pixel[0]=0xff3366cc` on buffers 0 and 1** — the FD names the
+real render target (bytes `cc6633ff` confirm ARGB8888/BGRA LE). 20 export/close
+cycles left `CmaFree` flat (no leak); `rmmod` is refused while an export FD is
+held and succeeds once released (the `owner=THIS_MODULE` unload guard enforces
+the Ownership Invariant). Buffers live at module scope, so a retained export
+survives the renderer exiting — no deferred-free machinery needed.
 
 ### What `dc_nohw` actually provides
 
