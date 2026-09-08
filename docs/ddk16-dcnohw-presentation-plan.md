@@ -28,7 +28,9 @@ KMS/display investigation is in [BTT HDMI7 and OMAP DRM notes](btt-hdmi7-omapdrm
 
 ## Current Status
 
-**Active stage:** extended Stage 0 validation; Stage 1 is blocked.
+**Active stage:** Stage 0 baseline is solid (stall, power-lock, and the item #7
+"leak" all resolved; CMA stress does not reproduce). Stage 1 (EGL window surface
+on `dc_nohw`) is next.
 
 **Original Stage 0 baseline:** passed for DDK 1.6 and, independently, DDK 1.4.
 
@@ -44,24 +46,37 @@ remains the rollback baseline. Neither stack has yet passed Stage 1: the pbuffer
 benchmark required `dc_nohw` registration but did not create an EGL window
 surface or exercise a DisplayClass swapchain.
 
-The stricter pre-Stage-1 guard added afterward completed five clean lifecycle
-cycles. Its first multi-process soak attempt failed during the second
-50,000-frame process: three hardware recoveries occurred, one with BIF fault
-address `0x0F0AB000`, and two frames exceeded 500 ms. A subsequent single EGL
-process rendered for the full 180 seconds and 99,050 frames, but two frames
-still exceeded 500 ms and a recovery began during teardown, about 0.34 seconds
-after the probe wrote its summary. Module exit then remained stuck with a `-1`
-module-use display, meaning the module was in its unloading state rather than
-having a negative reference count. The board remained responsive over SSH;
-only module unload was deadlocked.
+**Resolved since the original baseline (see
+[sgx-ddk16-stall-followups.md](sgx-ddk16-stall-followups.md)):**
 
-Kernel commit `e2b9d0eea` fixes that deadlock by allowing `ISR_ID` workqueue
-callers to use the existing nonblocking Services resource lock without first
-waiting on the custom OMAP power mutex. The post-fix five-cycle plus 180-second
-run exited and unloaded both modules cleanly. It still triggered two hardware
-recoveries during teardown and reported two frames over 500 ms across 97,768
-frames, with a 1.134-second maximum. Stage 1 remains blocked on the recovery
-and latency failures, not on module unload.
+- **Module-unload deadlock / stall (patches 0008 + 0009).** The running kernel
+  `7.2.0-ge2b9d0eea907-dirty` carries the SGX-IRQ fix (request INTC virq 37, the
+  DT-remapped view of hwirq 21) and the APM/power-lock fix that let `ISR_ID`
+  workqueue callers take the nonblocking Services resource lock without first
+  waiting on the custom OMAP power mutex. Fresh-boot lifecycle cycles and the
+  2000-frame render soak now load, run, and unload both modules cleanly.
+- **Item #7, the render-to-texture "leak" — no leak.** FBO/texture attachment
+  churn is balanced on every stack (DDK 1.4 Pandora, DDK 1.6 Ångström, DDK 1.6
+  Devuan), strace-confirmed `ALLOC_DEVICEMEM` ↔ `FREE_DEVICEMEM` per frame. The
+  earlier "OOM at ~40 frames" was a transient CMA-fragmentation state, not a
+  driver leak.
+
+**Fresh Stage 0 CMA stress (Devuan, `ge2b9d0eea907`, `cma=48M`).** A 180-second
+render-to-texture attachment-churn soak (`texture=1 rebind_attachment=1`) ran
+**98,855 frames with zero frames over 500 ms**. `CmaFree` stayed flat and in
+fact ended higher than it began (30,716 kB → 34,720 kB); `MemFree` recovered
+(50,688 kB → 55,604 kB); no OOM. The **CMA exhaustion did not reproduce.** A
+single `HWRecoveryResetSGX` fired during teardown with **all BIF fault registers
+zero** (`EUR_CR_BIF_FAULT: 00000000`) — the benign idle/teardown watchdog
+artifact, not a memory fault like the historical `0x0F0AB000`.
+
+**Remaining before Stage 1.** Re-run the long real-geometry soak
+(`sgx_render_flip_test`, triangle + flips, ~100k frames) on `ge2b9d0eea907` to
+confirm the earlier "2 recoveries + 2 frames over 500 ms across ~97k frames"
+report clears on the fixed kernel. Stage 1 itself is gated only on building an
+EGL **window** surface against `dc_nohw` and exercising the DisplayClass
+swapchain — neither stack has done that yet (the pbuffer benchmark registered
+`dc_nohw` but never created a window surface).
 
 ## Handoff Card
 
@@ -71,9 +86,10 @@ and latency failures, not on module unload.
 - B4 target: `root@192.168.50.245`
 - SSH key: `~/.ssh/geoduck_truenas`
 - Hardware: BeagleBoard Rev B4, OMAP3530 ES2.1, SGX530 SGX103, 128 MB RAM
-- Running kernel: `7.2.0-g2342ce92fdde-dirty`
+- Running kernel: `7.2.0-ge2b9d0eea907-dirty` (carries SGX-IRQ patch 0008 and
+  APM patch 0009)
 - Required vermagic:
-  `7.2.0-g2342ce92fdde-dirty SMP mod_unload modversions ARMv6 p2v8`
+  `7.2.0-ge2b9d0eea907-dirty SMP mod_unload modversions ARMv6 p2v8`
 
 ### Maintained Source
 
@@ -109,7 +125,7 @@ different debug build-option mask and is diagnostic-only.
 ```sh
 make -C /mnt/scratch/geoduck-tmp/beagle/openpvrsgx-ddk16 \
   ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- \
-  LOCALVERSION=-g2342ce92fdde-dirty \
+  LOCALVERSION=-ge2b9d0eea907-dirty \
   M=drivers/gpu/drm/pvrsgx \
   CONFIG_SGX=m CONFIG_SGX_OMAP=m \
   CONFIG_PVRSGX_1_6_16_3977=y \
@@ -165,11 +181,14 @@ per accepted command, including controlled shutdown and error paths.
 
 ## Stage 0: Stable Rendering Baseline
 
-**Status: short baseline passed; extended gate pending.** The release DDK
-initializes, `dc_nohw` registers, and the 120-frame alternating-FBO test
-completes without stalls or recovery. The extended soak exposed the recovery
-described above, so the following operating requirements must pass before
-opening Stage 1 changes.
+**Status: baseline solid; one real-geometry re-verification pending.** The
+release DDK initializes, `dc_nohw` registers, the alternating-FBO test completes
+without stalls or recovery, and the extended CMA stress soak (98,855 frames,
+zero over 500 ms, `CmaFree` flat, no OOM) does **not** reproduce the historical
+exhaustion. The module-unload stall and the item #7 "leak" are resolved. The
+only open Stage 0 item is re-running the long real-geometry soak
+(`sgx_render_flip_test`) on `ge2b9d0eea907` to confirm the earlier recovery /
+latency report clears on the fixed kernel.
 
 ### Preserve Reviewable Checkpoints
 
@@ -240,6 +259,35 @@ Instrument `CreateDCSwapChain`, `GetDCBuffers`, `SwapToDCBuffer`,
 points or debugfs counters. Do not add unbounded per-frame kernel logs, restore
 legacy procfs diagnostics, or inspect proprietary objects.
 
+### Game-Representative Coverage
+
+The end goal is a real GLES title (OpenQuartz/GLQuake-class, or a MonoGame 2D
+demo). Those apps exercise paths the FBO/pbuffer probes do not, so add these to
+the Stage 0 smoke before trusting a game run. Each is cheap and isolates one SGX
+subsystem:
+
+- **Depth buffer.** Request a config with a 16- or 24-bit depth buffer and run a
+  depth-tested draw. Games rely on the depth attachment and its tiler/ISP path;
+  the current clear-only probe never allocates one.
+- **Texture upload + sampling.** `glTexImage2D` a non-trivial texture (RGBA and
+  a compressed/paletted format if available) and sample it, including mipmaps.
+  GLQuake streams lightmaps every frame; MonoGame uploads sprite atlases.
+- **Blending / alpha.** Enable `GL_BLEND` and draw overlapping translucent quads
+  (2D sprite/HUD path). Confirms the ISP blend path and framebuffer read-back.
+- **Shader compile + link (GLES2).** Compile and link a non-trivial
+  vertex/fragment pair and check the info logs. The USSE compiler is a distinct
+  failure surface from raw draws.
+- **Sustained windowed swap cadence.** Once Stage 1 lands, drive `eglSwapBuffers`
+  at a fixed target rate for several minutes and record frame pacing and dropped
+  frames — the metric a game actually feels.
+- **Vertex buffers / index draws.** Draw from a VBO with `glDrawElements` rather
+  than immediate-style client arrays, matching how a game submits geometry.
+
+The existing `SGX_WINDOW` path in `tools/sgx-pbuffer-latency.c` (EGL window
+surface over fbdev, native handle 0) is the natural seed for the Stage 1
+dc_nohw window-surface probe: pointing it at `dc_nohw` drives the DisplayClass
+swapchain directly.
+
 ### Stage 0 Acceptance
 
 - Release `pvrsrvinit` exits zero.
@@ -277,140 +325,19 @@ Do not begin DMA-BUF work if Stage 1 requires proprietary EGL inspection,
 produces ambiguous buffer identity, or cannot establish exact command
 completion. Resolve the open DisplayClass behavior first.
 
-## Stage 2: DMA-BUF Export
+## Later Stages (2–8)
 
-Export a known `DC_NOHW_BUFFER` through a narrow open control interface.
+**Gated on Stage 1.** The DMA-BUF export, KMS import, synchronous and fenced GLES
+presentation, application validation, and packaging stages are kept in a satellite
+so this plan stays focused on the Stage 0 baseline and the next Stage 1:
 
-### Initial UAPI
+- [Presentation later stages (2–8)](ddk16-presentation-stages-2-8.md) — Stage 2
+  DMA-BUF export, Stage 3 KMS/CPU-pattern scanout, Stage 4 synchronous GLES
+  presentation, Stage 5 explicit fences, Stage 6 implicit sync, Stage 7 application
+  validation (OpenQuartz/game), Stage 8 packaging.
 
-Use a small `miscdevice` with fixed-width ioctls rather than extending the
-proprietary Services bridge. Initial operations should cover:
-
-- Query ABI version and current swapchain geometry.
-- Enumerate stable session-local buffer indices.
-- Export `EXPORT_BUFFER(index)` as a DMA-BUF FD.
-- Query read-only buffer state and sequence counters.
-
-Debugfs may expose diagnostics but is not the FD-export API.
-
-### Kernel Work
-
-- Add exporter state and reference counting per buffer.
-- Build an `sg_table` from the pages backing the discontiguous vmalloc buffer.
-- Implement attach, detach, map, unmap, begin/end CPU access, mmap if needed,
-  and release for the current kernel's `dma_buf_ops`.
-- Publish format, dimensions, stride, and allocation size explicitly.
-- Keep the backing allocation alive until Services, all DMA-BUFs, attachments,
-  framebuffers, and scanout references are gone.
-- Define module-unload behavior and reject unload while exports remain.
-
-### Pass Criteria
-
-- Every swapchain buffer can be exported repeatedly by index.
-- Attachment map/unmap cycles succeed without leaks.
-- Closing the renderer does not invalidate an intentionally retained export.
-- Closing the final export releases its reference exactly once.
-- Invalid indices, stale sessions, process death, and partial failures clean up
-  deterministically.
-
-## Stage 3: KMS Import and CPU-Pattern Scanout
-
-Build a hard-float presenter that receives DMA-BUF FDs over
-`SOCK_SEQPACKET`/`SCM_RIGHTS`, imports them into `omapdrm`, creates DRM
-framebuffers, and owns all atomic KMS state.
-
-Begin with CPU-generated color bars, not SGX rendering. This isolates DMA-BUF
-layout, cache transitions, GEM import, format, stride, mode setting, and page
-flip behavior.
-
-### Pass Criteria
-
-- `drmPrimeFDToHandle` imports every buffer.
-- The chosen DRM format and stride display correct color bars.
-- Double-buffer atomic flips run at the expected display cadence.
-- Renderer and presenter can exit independently without stale scanout or leaked
-  attachments.
-- No kernel warning, use-after-free, or display corruption occurs.
-
-## Stage 4: Synchronous GLES Presentation
-
-Connect the Stage 1 window renderer to the Stage 3 presenter using the exported
-swapchain buffers. Use explicit ready/free protocol messages and conservative
-Services completion before notifying the presenter.
-
-The fixed-width protocol must include ABI version, session ID, buffer index,
-frame sequence, dimensions, stride, DRM format, and message type. Reject stale
-sessions and non-monotonic sequences.
-
-### Pass Criteria
-
-- The rendered changing pattern or cube appears on the B4 display.
-- No buffer enters `RENDERING` while it is `QUEUED` or `SCANNING`.
-- `pfnPVRSRVCmdComplete` is issued only when the buffer is reusable.
-- At least 60 seconds of presentation completes without recovery or corruption.
-- SGX completion latency and KMS commit/flip latency are recorded separately.
-
-## Stage 5: Explicit Linux Fences
-
-Replace the conservative synchronous wait with a fence derived from the
-buffer's Services write counters.
-
-For serial $N$, signal completion only when
-$\text{WriteOpsComplete} \geq N$. The fence must be advanced from the Services
-completion path after firmware status is processed, not merely when an SGX
-interrupt occurs. Recovery and teardown must signal outstanding fences with an
-error.
-
-Export the fence as a sync-file FD and use the target plane's explicit input
-fence property when available. Fence completion does not replace DMA cache
-ownership transitions or the buffer state protocol.
-
-### Pass Criteria
-
-- The presenter can queue before SGX completion.
-- Scanout waits until the corresponding fence signals.
-- Scheduling jitter does not cause tearing or premature buffer reuse.
-- Recovery and shutdown resolve every outstanding fence.
-
-## Stage 6: Implicit Synchronization
-
-Attach the SGX completion fence to the exported DMA-BUF's `dma_resv` as its
-write fence. Let a compatible display-driver import path wait through normal
-framebuffer preparation.
-
-### Pass Criteria
-
-- The renderer/presenter protocol no longer transports a fence FD.
-- DMA-fence tracing shows `omapdrm` waiting on the PowerVR fence.
-- Explicit-fence and synchronous modes remain available as diagnostic controls.
-- Buffer reuse and teardown remain correct under process failure and recovery.
-
-## Stage 7: Application Validation
-
-Move from the synthetic cube to OpenQuartz or another appropriate OpenGL game.
-Keep the same EGL window, swapchain, export, and presenter path.
-
-### Pass Criteria
-
-- The application runs continuously for at least 30 minutes.
-- Input, resize policy, shutdown, and restart behave predictably.
-- Frame pacing, SGX completion, KMS latency, memory use, and dropped frames are
-  recorded.
-- No fallback to software rendering occurs.
-
-## Stage 8: Packaging and Portability
-
-Integrate the validated stack into the Devuan image and retain platform-neutral
-renderer/export protocol boundaries.
-
-### Deliverables
-
-- Reproducible kernel patches and configuration.
-- Version-matched DDK 1.6 SGX103 runtime staging.
-- `dc_nohw`, exporter UAPI documentation, presenter, and test programs.
-- Automated Stage 0 smoke test and longer soak test.
-- B4 KMS configuration and a separate Pandora display-validation checklist.
-- Recovery instructions that preserve the existing DDK 1.4 fallback.
+The architecture, ownership invariant, buffer-state protocol, and engineering rules
+below apply throughout those stages.
 
 ## Engineering Rules
 

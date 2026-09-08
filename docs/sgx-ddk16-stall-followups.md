@@ -22,7 +22,7 @@ count stuck at 0) and every `PVRSRVEventObjectWait` timed out. Fixed by
   measured symptom.** None is worth pursuing proactively — #2/#5 carry a concrete "reconsider if" trigger.
 - **render-to-texture (FBO) device-memory OOM: RESOLVED — no real leak (item #7).** A 2026-09-06 run OOM'd our
   Devuan 1.6 port under per-frame **texture**-attachment churn (`glFramebufferTexture2D`, ~40 frames), which
-  looked like a device-memory leak. It is **not**: the *same byte-identical* 1.6 blob runs the churn **clean on
+  looked like a device-memory leak. It is **not**: the _same byte-identical_ 1.6 blob runs the churn **clean on
   native Ångström 3.0.14** (memory recovers mid-run) with **strace-proven balanced `ALLOC`/`FREE_DEVICEMEM`**
   (268:268 over 5 frames); DDK **1.4** (OpenPandora) is clean too; and the OOM **does not reproduce on a
   fresh-boot Devuan** either (200 frames + 8×40 back-to-back, `CmaFree` flat, no OOM). The one-off OOM was a
@@ -157,7 +157,7 @@ observation on that renderbuffer probe — a separate phenomenon from this leak.
   burst issued **237 `_PVRSRVAllocDeviceMemKM` with 0 `PVRSRVFreeDeviceMemKM`** (and 59 `BM_ImportMemory`
   fresh CMA imports — ~4 fresh page imports per frame). The kernel free bridge is never called during
   rendering; frees are deferred to process teardown. **⚠️ CORRECTED (2026-09-07) — this was a wrong-symbol
-  artifact:** an `strace` of the *userspace* bridge on native Ångström (Result (d)) shows the blob issues
+  artifact:** an `strace` of the _userspace_ bridge on native Ångström (Result (d)) shows the blob issues
   **268 `FREE_DEVICEMEM` bridge calls, exactly balanced with 268 `ALLOC_DEVICEMEM`** — the frees DO happen
   per frame; `PVRSRVFreeDeviceMemKM` just isn't where the `FREE_DEVICEMEM` bridge lands, so the kprobe missed
   them. The "0 frees / it's the blob" inference below is superseded by Results (c)/(d).
@@ -236,7 +236,7 @@ observation on that renderbuffer probe — a separate phenomenon from this leak.
   `FREE_DEVICEMEM` bridge lands, so the kprobe under-counted frees to zero and wrongly implicated the blob.
   With balanced alloc/free proven and native memory recovering mid-run, the Devuan OOM is confirmed **CMA-side
   reclaim** (freed pages not returning to the pool under churn), **not** a blob or userspace leak — Hypothesis
-  A, decoupled from `dc_nohw`. Remaining loose end is only the *direct* Devuan confirmation (CMA-off run).
+  A, decoupled from `dc_nohw`. Remaining loose end is only the _direct_ Devuan confirmation (CMA-off run).
 - **Result (e) — the OOM does NOT reproduce on a fresh-boot Devuan (2026-09-07) — the "leak" was transient.**
   Re-ran the exact churn (`texture=1 rebind_attachment=1`, 1024×600) on the Devuan 1.6 port after a clean
   reboot (`cma=48M`): **200 frames continuous, rc=0, `CmaFree` flat (31584→31236 kB), no OOM** — and **8×40-frame
@@ -281,7 +281,7 @@ workload exhibits it.
 
 **Item #7 — RESOLVED, no real leak (2026-09-07).** The FBO **render-to-texture** attachment-churn "leak" does
 **not** reproduce. On a fresh-boot Devuan (`cma=48M`) the exact churn (`texture=1 rebind=1`) runs **200 frames
-continuous + 8×40 back-to-back — `CmaFree` flat, no OOM** (Result (e)); the *same byte-identical* 1.6 blob is
+continuous + 8×40 back-to-back — `CmaFree` flat, no OOM** (Result (e)); the _same byte-identical_ 1.6 blob is
 clean on native Ångström 3.0.14 ([../out/sgx-fbo-texture-ddk16-angstrom.csv](../out/sgx-fbo-texture-ddk16-angstrom.csv))
 with **strace-proven balanced alloc/free** (Result (d), [../out/sgx-fbo-ioctl-ddk16-angstrom.txt](../out/sgx-fbo-ioctl-ddk16-angstrom.txt));
 and DDK **1.4** (OpenPandora) is clean too ([../out/sgx-fbo-texture-ddk14-pandora.csv](../out/sgx-fbo-texture-ddk14-pandora.csv)).
