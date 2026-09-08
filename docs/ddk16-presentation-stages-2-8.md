@@ -2,7 +2,7 @@
 
 Satellite of the [DDK 1.6 `dc_nohw` presentation plan](ddk16-dcnohw-presentation-plan.md).
 
-These stages are **gated on Stage 1** — a proven DDK 1.6 EGL *window* surface driving the
+These stages are **gated on Stage 1** — a proven DDK 1.6 EGL _window_ surface driving the
 `dc_nohw` swapchain with exact command completion. They are kept out of the main plan so it
 stays focused on the current Stage 0 baseline and the next Stage 1. The architecture
 (DisplayClass boundary, ownership invariant, buffer-state protocol), Handoff Card, and
