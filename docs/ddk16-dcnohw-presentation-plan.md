@@ -28,10 +28,11 @@ KMS/display investigation is in [BTT HDMI7 and OMAP DRM notes](btt-hdmi7-omapdrm
 
 ## Current Status
 
-**Active stage:** Stage 1 window surface is **functionally passing** — the
-`dc_nohw` swapchain allocates (1A) and `eglSwapBuffers` cycles cleanly (1B,
-18k-swap soak, flat memory). Remaining Stage 1 work is the bounded kernel
-instrumentation to formally prove buffer rotation and exactly-once completion.
+**Active stage:** Stage 2 (DMA-BUF export). Stage 1 window surface is
+**functionally passing** — the `dc_nohw` swapchain allocates (1A) and
+`eglSwapBuffers` cycles cleanly (1B, 18k-swap soak, flat memory). The formal 1B
+proofs (buffer rotation, exactly-once completion) are folded into the Stage 2
+exporter, which must read the same `dc_nohw` buffer table.
 
 **Original Stage 0 baseline:** passed for DDK 1.6 and, independently, DDK 1.4.
 
@@ -370,16 +371,91 @@ deferred or reordered relative to export:** DMA-BUF export (Stage 2) depends on
 completion on the no-hardware display class proves problematic, move export
 ahead and revisit swap cycling under the KMS presenter.
 
-## Later Stages (2–8)
+## Stage 2: DMA-BUF Export
 
-**Gated on Stage 1.** The DMA-BUF export, KMS import, synchronous and fenced GLES
-presentation, application validation, and packaging stages are kept in a satellite
-so this plan stays focused on the Stage 0 baseline and the next Stage 1:
+**Status: active.** Export a known `dc_nohw` swapchain buffer — the same
+`DC_NOHW_BUFFER` that Stage 1 allocates and swaps — as a Linux DMA-BUF FD through
+a narrow open control interface. This is the bridge out of the closed Services
+world toward KMS scanout, and it needs no SGX rendering to validate. It depends
+only on Stage 1 Phase 1A (stable buffers by index).
 
-- [Presentation later stages (2–8)](ddk16-presentation-stages-2-8.md) — Stage 2
-  DMA-BUF export, Stage 3 KMS/CPU-pattern scanout, Stage 4 synchronous GLES
-  presentation, Stage 5 explicit fences, Stage 6 implicit sync, Stage 7 application
-  validation (OpenQuartz/game), Stage 8 packaging.
+### What `dc_nohw` actually provides
+
+Confirmed from the built module (`DC_NOHW_DISCONTIG_BUFFERS` +
+`DC_NOHW_GET_BUFFER_DIMENSIONS` in its `Kbuild`):
+
+- The swapchain owns a system buffer plus up to `DC_NOHW_MAX_BACKBUFFERS` (3)
+  back buffers in `DC_NOHW_SWAPCHAIN.asBackBuffers[]`, each a `DC_NOHW_BUFFER`
+  with a known `ui32BufferSize`.
+- Each buffer is backed by **discontiguous, non-cached `vmalloc` memory**
+  (`__vmalloc_node_range(..., pgprot_noncached, ...)`), with a per-page physical
+  array built via `vmalloc_to_page()`. There is no single contiguous DMA
+  address — the exporter must describe the buffer page-by-page.
+- Buffer width/height/stride are queryable (the `GET_BUFFER_DIMENSIONS` build
+  option), so the exporter publishes geometry without guessing.
+
+### Initial UAPI
+
+A small `miscdevice` (e.g. `/dev/dc_nohw_export`) with fixed-width ioctls, not an
+extension of the proprietary Services bridge:
+
+- `QUERY_ABI` — ABI version and current swapchain geometry (width, height,
+  stride, DRM `fourcc`, buffer count, buffer size).
+- `ENUM_BUFFERS` — stable session-local buffer indices for the current swapchain.
+- `EXPORT_BUFFER(index)` — return a DMA-BUF FD for that buffer.
+- `QUERY_BUFFER(index)` — read-only buffer state and sequence counters.
+
+Because the exporter must read `dc_nohw`'s private swapchain/buffer table, it
+lives inside (or directly beside) `dc_nohw` and exposes a small in-module
+enumeration API rather than reaching in from an unrelated module. Debugfs may
+mirror diagnostics but is not the FD-export path.
+
+### Kernel Work
+
+- Add exporter state and per-buffer reference counting keyed by the
+  `DC_NOHW_BUFFER`.
+- Build an `sg_table` from each buffer's pages via `vmalloc_to_page()` over
+  `ui32BufferSize` (one entry per page, coalescing physically adjacent pages).
+- Implement `attach`, `detach`, `map_dma_buf`, `unmap_dma_buf`,
+  `begin/end_cpu_access`, `mmap`, and `release` for the current kernel's
+  `dma_buf_ops`. The backing is already **non-cached**, so CPU-access cache
+  maintenance is minimal — but the importer's mapping attributes must match
+  (write-combine / non-cached) to avoid ARMv7 mismatched-attribute aliasing.
+- Publish DRM format, width, height, stride, and allocation size explicitly from
+  the queried dimensions.
+- Keep the backing `vmalloc` alive until Services, every DMA-BUF, attachment,
+  imported framebuffer, and scanout reference is gone (the Ownership Invariant).
+- Reject module unload while any export remains.
+
+### Pass Criteria
+
+- Every swapchain buffer exports repeatedly by index.
+- A test tool `mmap`s an exported FD and reads back the exact pixels the Stage 1
+  probe rendered into that buffer (clear colour or triangle) — end-to-end proof
+  the FD names the real render target.
+- Attach/map/unmap and export/close cycles succeed with memory flat (no leak).
+- Closing the renderer does not invalidate an intentionally retained export;
+  closing the final export releases its reference exactly once.
+- Invalid indices, stale sessions, process death, and partial failures clean up
+  deterministically; module unload is refused while exports are open.
+
+### Probe
+
+Add a `dc_nohw_export` smoke to the tooling: open the miscdevice, enumerate
+buffers, export each, `mmap`, and checksum the pixels while the Stage 1 probe
+drives `eglSwapBuffers`, confirming the mapped contents change per swap. No KMS
+yet — this isolates DMA-BUF identity, page mapping, and lifetime.
+
+## Later Stages (3–8)
+
+**Gated on Stage 2.** KMS import, synchronous and fenced GLES presentation,
+application validation, and packaging remain in the satellite so this plan stays
+focused on the active stage:
+
+- [Presentation later stages (3–8)](ddk16-presentation-stages-3-8.md) — Stage 3
+  KMS/CPU-pattern scanout, Stage 4 synchronous GLES presentation, Stage 5
+  explicit fences, Stage 6 implicit sync, Stage 7 application validation
+  (OpenQuartz/game), Stage 8 packaging.
 
 The architecture, ownership invariant, buffer-state protocol, and engineering rules
 below apply throughout those stages.
@@ -403,12 +479,18 @@ below apply throughout those stages.
 
 ## Immediate Next Actions
 
-1. Add a repeatable DDK 1.6 Stage 0 test script and run the lifecycle/soak guard.
-2. Locate the open WSEGL native-window contract in SDK samples or open headers.
-3. Implement the dedicated Stage 1 window-surface probe.
-4. Add bounded `dc_nohw` swapchain instrumentation in a separate commit.
-5. Run Stage 1 on the B4 and preserve logs and timing output.
-6. Checkpoint the passing Stage 1 implementation before beginning DMA-BUF work.
+1. Add an in-`dc_nohw` enumeration API over `DC_NOHW_SWAPCHAIN.asBackBuffers[]`
+   (index, size, queried dimensions) — this doubles as the formal Stage 1
+   buffer-set confirmation.
+2. Add the `dc_nohw_export` miscdevice with `QUERY_ABI` / `ENUM_BUFFERS` /
+   `EXPORT_BUFFER` / `QUERY_BUFFER` ioctls in a separate reviewable commit.
+3. Implement `dma_buf_ops` over an `sg_table` built from `vmalloc_to_page()`,
+   with per-buffer refcount and a module unload-guard.
+4. Add a `dc_nohw_export` userspace smoke: enumerate, export, `mmap`, checksum
+   pixels while the Stage 1 probe swaps.
+5. Run Stage 2 on the B4; confirm the mapped FD shows the rendered pixels and
+   memory stays flat across export/close cycles.
+6. Checkpoint the passing Stage 2 exporter before beginning Stage 3 KMS import.
 
 ## Explicit Non-Goals
 

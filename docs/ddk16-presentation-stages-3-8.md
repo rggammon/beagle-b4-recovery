@@ -1,48 +1,13 @@
-# OMAP3 SGX103 DDK 1.6 Presentation — Later Stages (2–8)
+# OMAP3 SGX103 DDK 1.6 Presentation — Later Stages (3–8)
 
 Satellite of the [DDK 1.6 `dc_nohw` presentation plan](ddk16-dcnohw-presentation-plan.md).
 
-These stages are **gated on Stage 1** — a proven DDK 1.6 EGL _window_ surface driving the
-`dc_nohw` swapchain with exact command completion. They are kept out of the main plan so it
-stays focused on the current Stage 0 baseline and the next Stage 1. The architecture
-(DisplayClass boundary, ownership invariant, buffer-state protocol), Handoff Card, and
-engineering rules live in the main plan and apply throughout.
-
-## Stage 2: DMA-BUF Export
-
-Export a known `DC_NOHW_BUFFER` through a narrow open control interface.
-
-### Initial UAPI
-
-Use a small `miscdevice` with fixed-width ioctls rather than extending the
-proprietary Services bridge. Initial operations should cover:
-
-- Query ABI version and current swapchain geometry.
-- Enumerate stable session-local buffer indices.
-- Export `EXPORT_BUFFER(index)` as a DMA-BUF FD.
-- Query read-only buffer state and sequence counters.
-
-Debugfs may expose diagnostics but is not the FD-export API.
-
-### Kernel Work
-
-- Add exporter state and reference counting per buffer.
-- Build an `sg_table` from the pages backing the discontiguous vmalloc buffer.
-- Implement attach, detach, map, unmap, begin/end CPU access, mmap if needed,
-  and release for the current kernel's `dma_buf_ops`.
-- Publish format, dimensions, stride, and allocation size explicitly.
-- Keep the backing allocation alive until Services, all DMA-BUFs, attachments,
-  framebuffers, and scanout references are gone.
-- Define module-unload behavior and reject unload while exports remain.
-
-### Pass Criteria
-
-- Every swapchain buffer can be exported repeatedly by index.
-- Attachment map/unmap cycles succeed without leaks.
-- Closing the renderer does not invalidate an intentionally retained export.
-- Closing the final export releases its reference exactly once.
-- Invalid indices, stale sessions, process death, and partial failures clean up
-  deterministically.
+These stages are **gated on Stage 2** — a working DMA-BUF export of the
+`dc_nohw` swapchain buffers (Stage 1 window surface and Stage 2 export both live
+in the main plan). They are kept out of the main plan so it stays focused on the
+active stage. The architecture (DisplayClass boundary, ownership invariant,
+buffer-state protocol), Handoff Card, and engineering rules live in the main plan
+and apply throughout.
 
 ## Stage 3: KMS Import and CPU-Pattern Scanout
 
