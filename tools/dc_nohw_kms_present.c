@@ -77,6 +77,7 @@ int main(int argc, char **argv)
     struct drm_mode_map_dumb mreq;
     struct drm_mode_fb_cmd2 fb;
     struct drm_mode_crtc crtc;
+    struct drm_mode_crtc saved_crtc;
     struct drm_mode_modeinfo mode;
     uint32_t conn_id = 0, crtc_id = 0;
     uint32_t *fbp;
@@ -141,6 +142,11 @@ int main(int argc, char **argv)
 
     printf("connector=%u crtc=%u mode=%s %ux%u@%u\n", conn_id, crtc_id,
            mode.name, mode.hdisplay, mode.vdisplay, mode.vrefresh);
+
+    /* Save the current (fbcon) CRTC state so exit can restore the console. */
+    memset(&saved_crtc, 0, sizeof(saved_crtc));
+    saved_crtc.crtc_id = crtc_id;
+    xioctl(DRM_IOCTL_MODE_GETCRTC, &saved_crtc, "GETCRTC(save)");
 
     if (do_import) {
         struct dc_nohw_export_abi eabi;
@@ -216,12 +222,13 @@ int main(int argc, char **argv)
 
     sleep(seconds);
 
-    /* Teardown: disable the CRTC, drop the fb + buffer, release master. */
+    /* Teardown: restore the saved (fbcon) CRTC, drop our fb + buffer, release master. */
     {
-        struct drm_mode_crtc off;
-        memset(&off, 0, sizeof(off));
-        off.crtc_id = crtc_id;
-        xioctl(DRM_IOCTL_MODE_SETCRTC, &off, "SETCRTC(off)");
+        if (saved_crtc.mode_valid && saved_crtc.fb_id) {
+            saved_crtc.set_connectors_ptr = (uint64_t)(uintptr_t)&conn_id;
+            saved_crtc.count_connectors = 1;
+            xioctl(DRM_IOCTL_MODE_SETCRTC, &saved_crtc, "SETCRTC(restore)");
+        }
         xioctl(DRM_IOCTL_MODE_RMFB, &fb.fb_id, "RMFB");
         munmap(map, map_size);
         if (do_import) {

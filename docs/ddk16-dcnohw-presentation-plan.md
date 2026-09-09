@@ -28,11 +28,11 @@ KMS/display investigation is in [BTT HDMI7 and OMAP DRM notes](btt-hdmi7-omapdrm
 
 ## Current Status
 
-**Active stage:** Stage 3 (KMS import + CPU-pattern scanout) **core validated** —
-the hard-float presenter imports a `dc_nohw` DMA-BUF into `omapdrm`
-(`PRIME_FD_TO_HANDLE` + `ADDFB2`) and scans it out on `DVI-D-1` at 1024x600 with
-CPU colour bars. Remaining Stage 3: eyes-on confirmation + a `PAGE_FLIP` cadence
-check. Stages 1 (window surface) and 2 (DMA-BUF export) remain validated.
+**Active stage:** Stage 4 (synchronous GLES presentation). Stage 3 (KMS import +
+CPU-pattern scanout) is **validated** — the hard-float presenter scans a
+`dc_nohw` DMA-BUF out on the BTT-HDMI7 (DVI-D-1, 1024x600), **visually confirmed
+on the panel**, with a clean fbcon console restore on exit. Stages 1 (window
+surface) and 2 (DMA-BUF export) remain validated.
 
 **Original Stage 0 baseline:** passed for DDK 1.6 and, independently, DDK 1.4.
 
@@ -466,11 +466,11 @@ yet — this isolates DMA-BUF identity, page mapping, and lifetime.
 
 ## Stage 3: KMS Import and CPU-Pattern Scanout
 
-**Status: core validated (import + scanout); visual confirmation + page-flip
-pending.** Put pixels on the B4 display for the first time. A hard-float
-presenter imports a DMA-BUF into `omapdrm`, wraps a DRM framebuffer, and drives
-KMS scanout — filled by the **CPU** (colour bars), not SGX. This isolates the
-display path (import, format, stride, mode set, flip) from the renderer.
+**Status: validated — pixels on screen.** Put pixels on the B4 display for the
+first time. A hard-float presenter imports a DMA-BUF into `omapdrm`, wraps a DRM
+framebuffer, and drives KMS scanout — filled by the **CPU** (colour bars), not
+SGX. This isolates the display path (import, format, stride, mode set, flip)
+from the renderer.
 
 **Results (2026-09-08, `tools/dc_nohw_kms_present.c`, hard-float raw ioctls):**
 
@@ -485,9 +485,12 @@ display path (import, format, stride, mode set, flip) from the renderer.
 - The only i2c noise is "Arbitration lost" on the DVI **DDC/EDID** bus (i2c-2),
   only during the connector probe, non-fatal — the mode comes from the `video=`
   cmdline. The connector stays `connected`.
-- **Open:** eyes-on confirmation of the bars on the physical monitor, and the
-  `PAGE_FLIP` double-buffer cadence check (deferred — flips are driven by the
-  renderer in Stage 4 anyway).
+- **Visual confirmation (2026-09-08):** both `dumb` and `import` modes show clean
+  colour bars on the **BTT-HDMI7** (1024x600) panel, and the presenter cleanly
+  restores the fbcon console on exit — it **saves the CRTC** (`GETCRTC`) at
+  startup and restores it (`SETCRTC`) while still DRM master, rather than
+  blanking. The `PAGE_FLIP` double-buffer cadence is folded into Stage 4, where
+  flips become renderer-driven.
 
 ### Confirmed display state (B4)
 
