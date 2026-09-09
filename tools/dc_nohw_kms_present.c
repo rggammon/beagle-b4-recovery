@@ -1,15 +1,14 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 /*
- * dc_nohw KMS presenter (Stage 3) — hard-float, raw DRM UAPI ioctls, no libdrm.
+ * dc_nohw KMS presenter — hard-float, raw DRM UAPI ioctls, no libdrm.
  *
- * The permanent hard-float presenter for the dc_nohw pipeline. Stage 3 fills the
- * scanout buffer with CPU colour bars (no SGX); later stages replace the fill
- * with imported dc_nohw DMA-BUF content (Phase 3B) and renderer IPC (Stage 4).
+ * The permanent hard-float presenter for the dc_nohw pipeline.
+ *   dumb [s]        - CPU colour bars in a DRM dumb buffer (Phase 3A: KMS bring-up).
+ *   import [s] [i]  - import dc_nohw back-buffer i, CPU-fill bars, scan out (Phase 3B).
+ *   raw [s] [i]     - import dc_nohw back-buffer i and scan it out UNTOUCHED, so an
+ *                     SGX-rendered frame reaches the panel (Stage 4 pixel proof).
  *
- * Phase 3A (this file): create a DRM dumb buffer, draw colour bars, and set the
- * mode on the connected DVI-D output to prove the KMS pipeline.
- *
- * Usage: dc_nohw_kms_present [seconds]   (default 5)
+ * Usage: dc_nohw_kms_present [dumb|import|raw] [seconds] [buffer_index]
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -63,8 +62,10 @@ static void draw_bars(uint32_t *px, uint32_t width, uint32_t height, uint32_t pi
 int main(int argc, char **argv)
 {
     const char *modearg = argc > 1 ? argv[1] : "dumb";
-    int do_import = strcmp(modearg, "import") == 0;
+    int do_raw = strcmp(modearg, "raw") == 0;
+    int do_import = strcmp(modearg, "import") == 0 || do_raw;
     int seconds = argc > 2 ? atoi(argv[2]) : 5;
+    uint32_t buf_index = argc > 3 ? (uint32_t)strtoul(argv[3], NULL, 0) : 0;
     int ctrl = -1, dmabuf_fd = -1;
     uint32_t gem_handle = 0;
     uint64_t map_size = 0;
@@ -158,6 +159,7 @@ int main(int argc, char **argv)
         memset(&eabi, 0, sizeof(eabi));
         if (ioctl(ctrl, DC_NOHW_EXPORT_QUERY_ABI, &eabi)) { perror("QUERY_ABI"); return 1; }
         memset(&ereq, 0, sizeof(ereq));
+        ereq.index = buf_index;
         if (ioctl(ctrl, DC_NOHW_EXPORT_BUFFER, &ereq)) { perror("EXPORT_BUFFER"); return 1; }
         dmabuf_fd = ereq.fd;
 
@@ -177,8 +179,10 @@ int main(int argc, char **argv)
         map = mmap(NULL, eabi.buffer_size, PROT_READ | PROT_WRITE, MAP_SHARED, dmabuf_fd, 0);
         if (map == MAP_FAILED) { perror("mmap dmabuf"); return 1; }
         map_size = eabi.buffer_size;
-        draw_bars((uint32_t *)map, eabi.width, eabi.height, eabi.stride);
-        printf("import: dmabuf_fd=%d gem=%u %ux%u stride=%u fb_id=%u\n",
+        if (!do_raw)
+            draw_bars((uint32_t *)map, eabi.width, eabi.height, eabi.stride);
+        printf("%s: buf=%u dmabuf_fd=%d gem=%u %ux%u stride=%u fb_id=%u\n",
+               do_raw ? "raw" : "import", buf_index,
                dmabuf_fd, gem_handle, eabi.width, eabi.height, eabi.stride, fb.fb_id);
     } else {
         /* Dumb buffer sized to the mode. */
@@ -218,7 +222,8 @@ int main(int argc, char **argv)
     crtc.mode = mode;
     crtc.mode_valid = 1;
     if (xioctl(DRM_IOCTL_MODE_SETCRTC, &crtc, "SETCRTC")) return 1;
-    printf("SETCRTC ok: colour bars on %s for %ds\n", mode.name, seconds);
+    printf("SETCRTC ok: %s on %s for %ds\n",
+           do_raw ? "SGX buffer" : "colour bars", mode.name, seconds);
 
     sleep(seconds);
 
