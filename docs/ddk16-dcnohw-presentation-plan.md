@@ -28,8 +28,9 @@ KMS/display investigation is in [BTT HDMI7 and OMAP DRM notes](btt-hdmi7-omapdrm
 
 ## Current Status
 
-**Active stage:** Stage 4 (synchronous GLES presentation). Stage 3 (KMS import +
-CPU-pattern scanout) is **validated** — the hard-float presenter scans a
+**Active stage:** Stage 4 (single-process pixel proof — an SGX-rendered frame
+scanned out in one soft-float process). Stage 3 (KMS import + CPU-pattern
+scanout) is **validated** — the presenter scans a
 `dc_nohw` DMA-BUF out on the BTT-HDMI7 (DVI-D-1, 1024x600), **visually confirmed
 on the panel**, with a clean fbcon console restore on exit. Stages 1 (window
 surface) and 2 (DMA-BUF export) remain validated.
@@ -187,6 +188,58 @@ FREE -> RENDERING -> READY -> QUEUED -> SCANNING -> FREE
 `pfnPVRSRVCmdComplete` means the DisplayClass command has completed and the
 buffer may be reused according to the protocol. It must be called exactly once
 per accepted command, including controlled shutdown and error paths.
+
+### Display ownership and the presentation path
+
+`dc_nohw` is the **permanent** bridge between the closed DDK's DisplayClass
+interface and modern DRM/KMS: the SGX blob only speaks DisplayClass, so
+`dc_nohw` stays the DisplayClass provider while `omapdrm` owns the display
+hardware. It is *not* `omaplfb` (the old PVR→fbdev bridge, a non-goal) and not
+`omapfb` (obsolete fbdev). The one CMA allocation `dc_nohw` makes is **shared,
+not copied** — DMA-BUF export/import passes a reference (refcount) and DRM PRIME
+(`PRIME_FD_TO_HANDLE`) imports the same physical pages `omapdrm`/DISPC scans out.
+
+**Who owns the CRTC.** `fbcon` is not a DRM master — it is an in-kernel
+`drm_client` fallback. The kernel auto-arbitrates `fbcon` ↔ exactly **one**
+userspace DRM master: `SET_MASTER` suspends `fbcon`; `DROP_MASTER`/close resumes
+it (Stage 3 proved this — the presenter took master, drew, and the console came
+back on exit). "Master" is only a **userspace-ioctl gate**; a driver's own
+in-kernel commit (`omapdrm`'s code, e.g. the Stage 6 hook) needs **no** master.
+There is no clean kernel pattern for two competing in-kernel `drm_client`s, so
+`dc_nohw` never becomes a master or a `drm_client` — it stays a **buffer
+provider** (and, in Stage 5, a **swap notifier**).
+
+**Transparent presentation.** An unmodified OpenGL game only calls
+`eglSwapBuffers`; it will not cooperate with a hand-off protocol. Presentation
+must therefore be triggered by the game's own swap. The per-frame userspace
+round-trip that a presenter adds is negligible (~20–50 µs vs ~28 ms/frame SGX
+render) — this is exactly how X and Wayland work.
+
+**Staging (details in Stages 4–6).**
+
+- **Stage 4** — a single soft-float process proves the pixel path end to end:
+  EGL render into a `dc_nohw` buffer → PRIME import → `SETCRTC` → one rendered
+  frame on the panel.
+- **Stage 5** — the debuggable prototype: the game runs **unmodified**, and a
+  separate userspace presenter (`sgxmode`, the "X server" role) is the DRM
+  master. `dc_nohw` gains a **swap-notify** (the one new kernel piece:
+  eventfd/poll reporting swapchain create/destroy and per-swap "buffer K, seq
+  N"); `sgxmode` imports the `dc_nohw` buffers as framebuffers once, flips on
+  each swap-notify, and paces on flip-done. `sgxmode` self-manages its VT
+  (`KD_GRAPHICS` + `K_OFF`, like X), launched on its own VT via stock
+  `openvt -s -w`. `fbcon` is kept (startx-style: consoles on the text VTs, the
+  game on its own graphics VT).
+- **Stage 6 (endgame)** — the flip loop moves **in-kernel**:
+  `EXPORT_SYMBOL_GPL(omapdrm_present)` in `omapdrm`; `dc_nohw`'s `ProcessFlip`
+  calls `omapdrm_present(fb[K], flip_done_cb, cookie)`, which does a
+  `drm_atomic_helper_commit` of the primary plane, and the vblank flip-done
+  callback drives `pfnPVRSRVCmdComplete`. No daemon and no master in the flip
+  path. `sgxmode` is retired; its flip loop becomes `omapdrm_present` and its
+  VT/keyboard/`fbcon`-parking residue becomes a **generic** launcher, `vtrun`
+  (see Stage 6). `dc_nohw` then depends on `{pvrsrvkm, omapdrm}`.
+
+Only **one** fullscreen app owns the panel at a time (single master, startx-style
+— no compositor, no arbitration policy).
 
 ## Stage 0: Stable Rendering Baseline
 
@@ -489,8 +542,8 @@ from the renderer.
   colour bars on the **BTT-HDMI7** (1024x600) panel, and the presenter cleanly
   restores the fbcon console on exit — it **saves the CRTC** (`GETCRTC`) at
   startup and restores it (`SETCRTC`) while still DRM master, rather than
-  blanking. The `PAGE_FLIP` double-buffer cadence is folded into Stage 4, where
-  flips become renderer-driven.
+  blanking. The `PAGE_FLIP` double-buffer cadence is folded into Stage 5, where
+  flips become swap-notify-driven.
 
 ### Confirmed display state (B4)
 
@@ -538,26 +591,59 @@ Pass criteria:
 
 ### Scope notes
 
-- **Self-contained:** Stage 3 needs no SGX and no renderer process. The
-  `SOCK_SEQPACKET`/`SCM_RIGHTS` FD hand-off is deferred to Stage 4, where the
-  soft-float EGL renderer owns the session and the presenter owns scanout.
-- **Master coordination:** the presenter takes DRM master; do not run an EGL
-  window session on `fb0` at the same time (Stage 4 keeps the renderer offscreen
-  in the `dc_nohw` buffers while the presenter owns the display).
+- **Self-contained:** Stage 3 needs no SGX and no renderer process. Stage 4
+  fuses render + scanout in one soft-float process (pixel proof); the
+  transparent presenter for an unmodified game arrives in Stage 5.
+- **Master coordination:** the presenter takes DRM master (suspending `fbcon`);
+  only one fullscreen app owns the panel at a time. In Stage 4 the single
+  process both renders and scans out; from Stage 5 the game renders into
+  `dc_nohw` buffers while `sgxmode` owns the display.
 - Tool: `tools/dc_nohw_kms_present.c` (hard-float, raw ioctls).
 
-## Later Stages (4–8)
+## Stage 4: Single-Process Pixel Proof
 
-**Gated on Stage 3.** Synchronous and fenced GLES presentation, application
-validation, and packaging remain in the satellite so this plan stays focused on
-the active stage:
+**Gated on Stage 3.** Prove the whole pixel path in **one soft-float process**:
+EGL renders a frame into a `dc_nohw` swapchain buffer, the same process imports
+that buffer via DRM PRIME and scans it out with `SETCRTC`. This fuses the Stage 1
+renderer and the Stage 3 present code (rebuilt soft-float — the DRM path is
+float-free raw ioctls) to confirm an SGX-rendered frame reaches the panel, before
+any presenter, swap-notify, or continuous flipping exists.
 
-- [Presentation later stages (4–8)](ddk16-presentation-stages-4-8.md) — Stage 4
-  synchronous GLES presentation, Stage 5 explicit fences, Stage 6 implicit sync,
-  Stage 7 application validation (OpenQuartz/game), Stage 8 packaging.
+- Render one frame with the Stage 1 EGL path into a `dc_nohw` buffer.
+- `EXPORT_BUFFER` → `PRIME_FD_TO_HANDLE` → `ADDFB2` → `SETCRTC`, in-process.
+- Read back the exact SGX-produced pixels on screen (a known clear colour or the
+  Stage 1 triangle), not a CPU pattern.
 
-The architecture, ownership invariant, buffer-state protocol, and engineering rules
-below apply throughout those stages.
+### Pass Criteria
+
+- An **SGX-rendered** frame (not a CPU fill) appears on the B4 panel.
+- The buffer-state protocol holds; `pfnPVRSRVCmdComplete` fires exactly once for
+  the presented frame.
+- Clean teardown restores the console (save/restore CRTC as in Stage 3).
+- SGX completion and KMS commit latency are recorded separately.
+
+### Scope notes
+
+- **Single process, no IPC.** Stage 4 deliberately avoids a separate presenter
+  and any hand-off: it is the minimal proof that SGX pixels can be scanned out.
+  Continuous, swap-driven flipping with an unmodified game moves to Stage 5.
+- The present code is the Stage 3 tool rebuilt soft-float and called in-process
+  (no hard-float presenter — the DisplayClass/KMS boundary stays documented, but
+  it is now a function-call boundary inside one soft-float binary).
+
+## Later Stages (5–8)
+
+**Gated on Stage 4.** The transparent presenter, the in-kernel flip endgame,
+application validation, and packaging live in the satellite so this plan stays
+focused on the active stage:
+
+- [Presentation later stages (5–8)](ddk16-presentation-stages-5-8.md) — Stage 5
+  `sgxmode` userspace presenter + `dc_nohw` swap-notify (unmodified game), Stage 6
+  in-kernel `omapdrm_present` endgame + generic `vtrun` launcher, Stage 7
+  application validation (OpenQuartz/GLQuake, soft-float), Stage 8 packaging.
+
+The architecture, ownership invariant, buffer-state protocol, and engineering
+rules below apply throughout those stages.
 
 ## Engineering Rules
 
@@ -570,26 +656,29 @@ below apply throughout those stages.
 5. Keep instrumentation bounded and removable.
 6. Do not port `omaplfb` or revive obsolete procfs diagnostics.
 7. Do not inspect proprietary EGL/GLES structures or command streams.
-8. Keep soft-float rendering and hard-float presentation separated by documented
-   IPC and DMA-BUF interfaces.
+8. Keep the soft-float renderer and the DRM presentation path separated by the
+   documented DisplayClass / DMA-BUF / KMS boundary. The presenter is float-free
+   (raw DRM ioctls) — it builds soft-float and may run in-process (Stage 4), as
+   the `sgxmode` util (Stage 5), or as the in-kernel `omapdrm_present` hook
+   (Stage 6).
 9. Treat cache management, synchronization, ownership, and lifetime as separate
    correctness requirements.
 10. Reject unrelated refactors while the staged validation path is incomplete.
 
 ## Immediate Next Actions
 
-1. Write `tools/dc_nohw_kms_present.c` (hard-float, raw DRM ioctls): enumerate
-   resources, find the `DVI-D-1` connector/CRTC, become DRM master.
-2. Phase 3A: dumb-buffer colour bars via `CREATE_DUMB` + `MAP_DUMB` + `ADDFB2` +
-   `MODE_SETCRTC` at 1024x600 — prove the display pipeline.
-3. Phase 3B: `EXPORT_BUFFER` from `/dev/dc_nohw_export`, `PRIME_FD_TO_HANDLE`,
-   `ADDFB2` over the imported handle, CPU-fill via `mmap`, `SetCrtc` — retire the
-   `omapdrm` import risk.
-4. Add `PAGE_FLIP` double-buffering between two exported buffers at the display
-   cadence; confirm clean teardown restores the console.
-5. Run Stage 3 on the B4; capture whether bars appear and any dmesg warnings.
-6. Checkpoint the passing Stage 3 presenter before beginning Stage 4 (connect
-   the SGX renderer via the `SCM_RIGHTS` FD hand-off).
+1. Stage 4: rebuild the Stage 3 present code (`tools/dc_nohw_kms_present.c`)
+   soft-float and call it in-process from a soft-float EGL renderer (extend the
+   Stage 1 `sgx-window-swap` tool), so one process renders into a `dc_nohw`
+   buffer and scans it out.
+2. Render a known SGX frame (clear colour or the Stage 1 triangle), then
+   `EXPORT_BUFFER` → `PRIME_FD_TO_HANDLE` → `ADDFB2` → `SETCRTC` in the same
+   process; confirm the **SGX-produced** pixels appear on the panel.
+3. Verify `pfnPVRSRVCmdComplete` fires exactly once and the console restores on
+   exit (save/restore CRTC as in Stage 3).
+4. Checkpoint Stage 4, then begin Stage 5: add the `dc_nohw` swap-notify
+   (eventfd/poll: swapchain create/destroy + per-swap buffer/seq) and the
+   `sgxmode` presenter that flips on it while an **unmodified** game renders.
 
 ## Explicit Non-Goals
 
@@ -597,8 +686,8 @@ below apply throughout those stages.
 - Porting legacy `omaplfb`, fbdev, OMAP DSS, or VRFB internals.
 - Reverse engineering proprietary EGL, GLES, firmware, or command buffers.
 - Exporting arbitrary proprietary allocations.
-- Combining the soft-float renderer with the hard-float presenter in one
-  process.
+- Running a persistent compositor or window system — one fullscreen app owns the
+  panel at a time (startx-style).
 
 ## Acronyms
 
