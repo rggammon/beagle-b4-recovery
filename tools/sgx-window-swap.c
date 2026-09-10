@@ -69,6 +69,21 @@
 #define GL_FLOAT 0x1406
 #define GL_FALSE 0
 #define GL_TRIANGLES 0x0004
+#define GL_TEXTURE_2D 0x0de1
+#define GL_TEXTURE0 0x84c0
+#define GL_TEXTURE_MIN_FILTER 0x2801
+#define GL_TEXTURE_MAG_FILTER 0x2800
+#define GL_TEXTURE_WRAP_S 0x2802
+#define GL_TEXTURE_WRAP_T 0x2803
+#define GL_LINEAR 0x2601
+#define GL_CLAMP_TO_EDGE 0x812f
+#define GL_RGBA 0x1908
+#define GL_UNSIGNED_BYTE 0x1401
+#define GL_UNSIGNED_SHORT 0x1403
+#define GL_ELEMENT_ARRAY_BUFFER 0x8893
+#define GL_BLEND 0x0be2
+#define GL_SRC_ALPHA 0x0302
+#define GL_ONE_MINUS_SRC_ALPHA 0x0303
 
 #define WIDTH 1024
 #define HEIGHT 600
@@ -172,6 +187,19 @@ static void (*glDeleteBuffers)(GLsizei, const GLuint *);
 static void (*glDeleteProgram)(GLuint);
 static void (*glDeleteShader)(GLuint);
 
+/* GLES2 texture/blend/index (resolved only for SGX_TEXTURE) */
+static void (*glGenTextures)(GLsizei, GLuint *);
+static void (*glBindTexture)(GLenum, GLuint);
+static void (*glTexImage2D)(GLenum, GLint, GLint, GLsizei, GLsizei, GLint, GLenum, GLenum, const void *);
+static void (*glTexParameteri)(GLenum, GLenum, GLint);
+static void (*glActiveTexture)(GLenum);
+static void (*glUniform1i)(GLint, GLint);
+static void (*glUniform2f)(GLint, GLfloat, GLfloat);
+static void (*glBlendFunc)(GLenum, GLenum);
+static void (*glDisable)(GLenum);
+static void (*glDrawElements)(GLenum, GLsizei, GLenum, const void *);
+static void (*glDeleteTextures)(GLsizei, const GLuint *);
+
 static const char *vertex_source =
     "attribute vec2 pos;\n"
     "uniform float angle;\n"
@@ -188,6 +216,28 @@ static const char *fragment_source =
     "uniform float t;\n"
     "void main() {\n"
     "  gl_FragColor = vec4(0.5 + 0.5*sin(t), v.x + 0.5, v.y + 0.5, 1.0);\n"
+    "}\n";
+
+static const char *tex_vertex_source =
+    "attribute vec2 pos;\n"
+    "attribute vec2 uv;\n"
+    "uniform float angle;\n"
+    "uniform vec2 off;\n"
+    "varying vec2 vuv;\n"
+    "void main() {\n"
+    "  float c = cos(angle), s = sin(angle);\n"
+    "  vec2 p = vec2(pos.x*c - pos.y*s, pos.x*s + pos.y*c) + off;\n"
+    "  gl_Position = vec4(p, 0.0, 1.0);\n"
+    "  vuv = uv;\n"
+    "}\n";
+
+static const char *tex_fragment_source =
+    "precision mediump float;\n"
+    "varying vec2 vuv;\n"
+    "uniform sampler2D tex;\n"
+    "uniform float alpha;\n"
+    "void main() {\n"
+    "  gl_FragColor = texture2D(tex, vuv) * vec4(1.0, 1.0, 1.0, alpha);\n"
     "}\n";
 
 static GLuint compile_shader(void *gles, GLenum type, const char *src)
@@ -232,6 +282,21 @@ static void resolve_triangle_symbols(void *gles)
     glDeleteBuffers = symbol(gles, "glDeleteBuffers");
     glDeleteProgram = symbol(gles, "glDeleteProgram");
     glDeleteShader = symbol(gles, "glDeleteShader");
+}
+
+static void resolve_texture_symbols(void *gles)
+{
+    glGenTextures = symbol(gles, "glGenTextures");
+    glBindTexture = symbol(gles, "glBindTexture");
+    glTexImage2D = symbol(gles, "glTexImage2D");
+    glTexParameteri = symbol(gles, "glTexParameteri");
+    glActiveTexture = symbol(gles, "glActiveTexture");
+    glUniform1i = symbol(gles, "glUniform1i");
+    glUniform2f = symbol(gles, "glUniform2f");
+    glBlendFunc = symbol(gles, "glBlendFunc");
+    glDisable = symbol(gles, "glDisable");
+    glDrawElements = symbol(gles, "glDrawElements");
+    glDeleteTextures = symbol(gles, "glDeleteTextures");
 }
 
 /* dc_nohw exporter UAPI (mirror of dc_nohw_export.h). */
@@ -381,6 +446,10 @@ int main(int argc, char **argv)
                                  atoi(getenv("SGX_DURATION_SECONDS")) : 0;
     const int use_triangle = getenv("SGX_TRIANGLE") != NULL &&
                              atoi(getenv("SGX_TRIANGLE")) != 0;
+    const int use_texture = getenv("SGX_TEXTURE") != NULL &&
+                            atoi(getenv("SGX_TEXTURE")) != 0;
+    const int use_blend = getenv("SGX_BLEND") != NULL &&
+                          atoi(getenv("SGX_BLEND")) != 0;
     const int use_depth = getenv("SGX_DEPTH") != NULL &&
                           atoi(getenv("SGX_DEPTH")) != 0;
     const int summary_only = getenv("SGX_SUMMARY_ONLY") != NULL &&
@@ -399,6 +468,9 @@ int main(int argc, char **argv)
     char renderer[128] = {0};
     GLuint program = 0, vbo = 0;
     GLint loc_pos = -1, loc_angle = -1, loc_t = -1;
+    GLuint texprog = 0, quad_vbo = 0, quad_ibo = 0, tex = 0;
+    GLint tloc_pos = -1, tloc_uv = -1, tloc_angle = -1, tloc_off = -1,
+          tloc_tex = -1, tloc_alpha = -1;
     int cycle;
     uint64_t total_swaps = 0;
     uint64_t total_swap_ns = 0;
@@ -476,10 +548,10 @@ int main(int argc, char **argv)
     if (context == EGL_NO_CONTEXT)
         fail("eglCreateContext");
 
-    printf("egl=%d.%d vendor=%s version=%s triangle=%d depth=%d swap=%d cycles=%d "
+    printf("egl=%d.%d vendor=%s version=%s triangle=%d texture=%d blend=%d depth=%d swap=%d cycles=%d "
            "frames_per_cycle=%d duration_seconds=%d\n",
            major, minor, eglQueryString(display, EGL_VENDOR),
-           eglQueryString(display, EGL_VERSION), use_triangle, use_depth, do_swap,
+           eglQueryString(display, EGL_VERSION), use_triangle, use_texture, use_blend, use_depth, do_swap,
            cycles, frames_per_cycle, duration_seconds);
 
     for (cycle = 0; cycle < cycles; cycle++) {
@@ -507,7 +579,7 @@ int main(int argc, char **argv)
         if (use_depth)
             glEnable(GL_DEPTH_TEST);
 
-        if (use_triangle && program == 0) {
+        if (use_triangle && !use_texture && program == 0) {
             const GLfloat triangle[] = {
                  0.0f,  0.6f,
                 -0.6f, -0.6f,
@@ -543,6 +615,89 @@ int main(int argc, char **argv)
             glEnableVertexAttribArray((GLuint)loc_pos);
         }
 
+        if (use_texture && texprog == 0) {
+            /* interleaved pos.xy, uv.xy */
+            static const GLfloat quad[] = {
+                -0.5f, -0.5f, 0.0f, 0.0f,
+                 0.5f, -0.5f, 1.0f, 0.0f,
+                 0.5f,  0.5f, 1.0f, 1.0f,
+                -0.5f,  0.5f, 0.0f, 1.0f,
+            };
+            static const unsigned short idx[] = { 0, 1, 2, 0, 2, 3 };
+            unsigned char pix[64 * 64 * 4];
+            int tx, ty;
+            GLuint vs, fs;
+            GLint ok = 0;
+
+            resolve_triangle_symbols(gles_library);
+            resolve_texture_symbols(gles_library);
+
+            /* procedural RGBA: checkerboard blended with an xy gradient */
+            for (ty = 0; ty < 64; ty++) {
+                for (tx = 0; tx < 64; tx++) {
+                    unsigned char *p = &pix[(ty * 64 + tx) * 4];
+                    int chk = ((tx >> 3) ^ (ty >> 3)) & 1;
+                    p[0] = (unsigned char)(chk ? 230 : tx * 4);
+                    p[1] = (unsigned char)(chk ? 60 : ty * 4);
+                    p[2] = (unsigned char)(chk ? 30 : 200);
+                    p[3] = 255;
+                }
+            }
+
+            vs = compile_shader(gles_library, GL_VERTEX_SHADER, tex_vertex_source);
+            fs = compile_shader(gles_library, GL_FRAGMENT_SHADER, tex_fragment_source);
+            texprog = glCreateProgram();
+            glAttachShader(texprog, vs);
+            glAttachShader(texprog, fs);
+            glLinkProgram(texprog);
+            glGetProgramiv(texprog, GL_LINK_STATUS, &ok);
+            if (!ok) {
+                char log[512] = {0};
+                glGetProgramInfoLog(texprog, sizeof(log) - 1, NULL, log);
+                fprintf(stderr, "FAIL: tex program link: %s\n", log);
+                return 1;
+            }
+            glDeleteShader(vs);
+            glDeleteShader(fs);
+
+            tloc_pos = glGetAttribLocation(texprog, "pos");
+            tloc_uv = glGetAttribLocation(texprog, "uv");
+            tloc_angle = glGetUniformLocation(texprog, "angle");
+            tloc_off = glGetUniformLocation(texprog, "off");
+            tloc_tex = glGetUniformLocation(texprog, "tex");
+            tloc_alpha = glGetUniformLocation(texprog, "alpha");
+
+            glGenBuffers(1, &quad_vbo);
+            glBindBuffer(GL_ARRAY_BUFFER, quad_vbo);
+            glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_STATIC_DRAW);
+            glGenBuffers(1, &quad_ibo);
+            glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, quad_ibo);
+            glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(idx), idx, GL_STATIC_DRAW);
+
+            glGenTextures(1, &tex);
+            glBindTexture(GL_TEXTURE_2D, tex);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 64, 64, 0,
+                         GL_RGBA, GL_UNSIGNED_BYTE, pix);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+            glUseProgram(texprog);
+            glBindBuffer(GL_ARRAY_BUFFER, quad_vbo);
+            glVertexAttribPointer((GLuint)tloc_pos, 2, GL_FLOAT, GL_FALSE,
+                                  4 * sizeof(GLfloat), (const void *)0);
+            glEnableVertexAttribArray((GLuint)tloc_pos);
+            glVertexAttribPointer((GLuint)tloc_uv, 2, GL_FLOAT, GL_FALSE,
+                                  4 * sizeof(GLfloat),
+                                  (const void *)(2 * sizeof(GLfloat)));
+            glEnableVertexAttribArray((GLuint)tloc_uv);
+            glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, quad_ibo);
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, tex);
+            glUniform1i(tloc_tex, 0);
+        }
+
         cycle_start = monotonic_ns();
         for (frame = 0; ; frame++) {
             float phase = (float)frame * 0.05f;
@@ -554,7 +709,24 @@ int main(int argc, char **argv)
                 monotonic_ns() - cycle_start >= (uint64_t)duration_seconds * 1000000000ULL)
                 break;
 
-            if (use_triangle) {
+            if (use_texture) {
+                float o = 0.3f * ((float)(frame % 60) / 30.0f - 1.0f);
+                glClearColor(0.1f, 0.1f, 0.12f, 1.0f);
+                glClear(GL_COLOR_BUFFER_BIT | (use_depth ? GL_DEPTH_BUFFER_BIT : 0));
+                glUseProgram(texprog);
+                glUniform1f(tloc_angle, phase);
+                glUniform2f(tloc_off, 0.0f, 0.0f);
+                glUniform1f(tloc_alpha, 1.0f);
+                glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, 0);
+                if (use_blend) {
+                    glEnable(GL_BLEND);
+                    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+                    glUniform2f(tloc_off, o, -o);
+                    glUniform1f(tloc_alpha, 0.5f);
+                    glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, 0);
+                    glDisable(GL_BLEND);
+                }
+            } else if (use_triangle) {
                 glClearColor(0.1f, 0.1f, 0.12f, 1.0f);
                 glClear(GL_COLOR_BUFFER_BIT | (use_depth ? GL_DEPTH_BUFFER_BIT : 0));
                 glUniform1f(loc_angle, phase);
