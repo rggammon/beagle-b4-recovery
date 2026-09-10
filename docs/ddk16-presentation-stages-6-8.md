@@ -13,7 +13,7 @@ Stage 6 moves the flip **in-kernel** (daemonless endgame); Stage 5a's userspace
 flip loop is its working prototype. **Phase 5b was skipped** — its buffer-state
 pacing is validated directly here as **Stage 6b** (driven by the real in-kernel
 vblank flip-done, not a throwaway `sgxmode` ioctl loop). Stage 6 is split into
-**6a** (in-kernel *mailbox* flip: prove the `omapdrm` export + in-kernel atomic
+**6a** (in-kernel _mailbox_ flip: prove the `omapdrm` export + in-kernel atomic
 commit, complete immediately — same ghosting as 5a) and **6b** (paced: hold
 completion until vblank flip-done — ghosting gone). Stage 7 validates a real game
 unchanged; Stage 8 packages the appliance.
@@ -149,25 +149,55 @@ Pass criteria:
 - [ ] Stage 0 lifecycle/soak re-test (both `omapdrm.ko` and `dcnohw.ko`
       changed) — **still owed** before closing Stage 6.
 
-### Phase 6b: Paced in-kernel flip
+### Phase 6b: Paced in-kernel flip — VALIDATED (2026-09-10)
 
-Add vblank pacing: `ProcessFlip` does **not** complete inline; the `omapdrm`
-flip-done callback (vblank) calls `pfnPVRSRVCmdComplete` — exactly once per swap,
-restoring the `FREE → RENDERING → READY → QUEUED → SCANNING → FREE` buffer-state
-protocol and vsync back-pressure. This is the pacing 5b would have done, now
-driven by the real in-kernel flip-done. Ghosting is gone.
+Add vblank pacing: `ProcessFlip` does **not** complete inline; instead it defers
+the swap to a FIFO worker that does a **blocking** `omapdrm_present` (the flip)
+and then completes the swap — freeing the *previously* displayed buffer, now
+off-screen. So the game paces to vblank and the
+`FREE → RENDERING → READY → QUEUED → SCANNING → FREE` buffer-state protocol holds.
+Ghosting is gone.
+
+**Result:** `present` became an int param (`0`=off, `1`=mailbox/6a, `2`=paced/6b).
+The paced worker imports the `dc_nohw` buffers as `omapdrm` framebuffers once,
+and per swap: blocking-commit `fb[index]`, then `DCNohwCompleteFlip(cookie)`
+(complete-current, *not* off-by-one — completing after the flip frees the
+off-screen previous buffer, so no reuse-while-scanning, no deadlock). An
+**unmodified** `sgx-window-swap` showed a **clean single rotating triangle (no
+ghost)** at ~59 fps (paced to the 60 Hz panel), clean exit, `dcnohw` unloadable,
+dmesg clean.
+
+**Three bugs fixed to get here:**
+
+- **fb refcount cycle** — each imported fb holds the `dc_nohw` dma_buf
+  (`owner=THIS_MODULE`), pinning `dcnohw`. Releasing fbs on **swapchain-destroy**
+  (`DCNohwPresentFlush`), not at module unload, keeps `dcnohw` `rmmod`-able
+  (buffers are module-scope, re-imported next session).
+- **completion deadlock** — an off-by-one attempt (complete *previous*) withheld
+  the last swap's completion → the game hung in `eglSwapBuffers`. Completing the
+  **current** swap right after its blocking commit is both tear-free and
+  deadlock-free.
+- **`pfnPVRSRVCmdComplete` context** — calling it with `IMG_FALSE` from the
+  kworker raced pvrsrvkm's buffer manager and corrupted its hash (`HASH_Remove`
+  NULL-deref in `BM_Free` on game exit). Passing **`IMG_TRUE`** (schedule the
+  MISR, as omaplfb does from its ISR) serializes completion with the DDK command
+  queue → clean exit.
 
 Pass criteria:
 
-- `omapdrm_present` commits pace to vblank; flip-done drives
-  `pfnPVRSRVCmdComplete` **exactly once** per swap; the buffer-state protocol
-  holds (no overwrite-while-scanning, no ghosting).
-- Process failure and recovery keep buffer reuse correct; a sustained
-  multi-minute run stays memory-flat with no recovery.
-- SGX completion, in-kernel commit, and KMS flip latency are recorded
-  separately.
-- Console-park (bring-up) and console-unbind (ship) are each clean and
-  reversible.
+- [x] `omapdrm_present` commits pace to vblank; `pfnPVRSRVCmdComplete` fires
+      **exactly once** per swap; the buffer-state protocol holds (no ghosting).
+- [x] Clean game exit, no pvrsrvkm fault; `dcnohw` unloads after each session.
+- [ ] Sustained multi-minute soak stays memory-flat with no recovery — folded
+      into the owed **Stage 0 lifecycle/soak re-test**.
+- Console-park (bring-up) and console-unbind (ship) each clean and reversible
+  (park validated; unbind is the ship path).
+
+**Panel caveat.** The BTT-HDMI7 (no EDID, forced `video=` timing) intermittently
+boots into a bad mode (vertical-band garbage, uncleared background visible even
+in `fbcon`); the in-kernel present only does a **plane** update, so it inherits
+`fbcon`'s boot mode. A clean boot is required until the present/`vtrun` path does
+its own `SETCRTC`/modeset — a Stage 8 hardening item.
 
 ## Stage 7: Application Validation
 

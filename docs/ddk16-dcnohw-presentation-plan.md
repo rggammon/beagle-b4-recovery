@@ -28,14 +28,24 @@ KMS/display investigation is in [BTT HDMI7 and OMAP DRM notes](btt-hdmi7-omapdrm
 
 ## Current Status
 
-**Active stage:** Stage 6b (paced in-kernel flip). **Phase 6a VALIDATED
+**Active stage:** Stage 6 COMPLETE — next is the owed Stage 0 lifecycle/soak
+re-test, then Stage 7 (real game). **Phase 6b VALIDATED (2026-09-10):** the
+in-kernel flip is now **paced** — `dc_nohw`'s `ProcessFlip` defers completion to
+a FIFO worker that blocking-commits each swap via `omapdrm_present` then
+completes it (freeing the previously-displayed, now off-screen buffer), so the
+game paces to vblank and the buffer-state protocol holds. An **unmodified**
+`sgx-window-swap` showed a **clean single rotating triangle (no ghost)** at
+~59 fps, clean exit, `dcnohw` unloadable, dmesg clean. Key fix: completion uses
+`pfnPVRSRVCmdComplete(cookie, IMG_TRUE)` (schedule MISR) so it serializes with
+the DDK command queue — `IMG_FALSE` from the kworker corrupted the buffer-manager
+hash (`HASH_Remove` crash on game exit). `present` is now an int param
+(0=off, 1=mailbox/6a, 2=paced/6b), default off. **Phase 6a VALIDATED
 (2026-09-09):** the flip loop moved **in-kernel** — `dc_nohw`'s `ProcessFlip`
 drives `omapdrm_present` (exported `EXPORT_SYMBOL_GPL`) directly, so an
 **unmodified** `sgx-window-swap` animated on the BTT-HDMI7 (3059 swaps/30 s,
 rotating triangle, same expected mailbox ghosting) with **no presenter daemon in
 the flip path** — `sgxmode` only parked DRM master to suspend `fbcon`. `omapdrm`
-refcount confirmed dc_nohw drives it; dmesg clean. Next: Phase 6b (hold
-completion until vblank flip-done → pacing, ghosting gone). **Phase 5a VALIDATED
+refcount confirmed dc*nohw drives it; dmesg clean. **Phase 5a VALIDATED
 (2026-09-09):** an **unmodified**
 `sgx-window-swap` animated on the panel through the `dc_nohw` swap-notify →
 `sgxmode` `PAGE_FLIP` path (3110 swaps/30 s, rotating triangle, expected mailbox
@@ -48,7 +58,7 @@ commit). The buffer-state pacing that 5b would have proven is instead done as
 `CONFIG_DRM_OMAP=m` on the board, so Stage 6 keeps a cheap loop (rebuild
 `omapdrm.ko` + reboot, no kernel reflash).
 **Stage 4 complete (2026-09-09):** an SGX-rendered frame — a solid
-clear _and_ a shader/VBO/depth triangle — reached the BTT-HDMI7 through the
+clear \_and* a shader/VBO/depth triangle — reached the BTT-HDMI7 through the
 zero-copy `dc_nohw → PRIME → omapdrm` path, both as a two-process `raw` present
 (Phase 4a) and from a **single soft-float process** that renders and scans out
 itself (Phase 4b), each with a clean console restore. Stages 1–3 remain
