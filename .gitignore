@@ -3,6 +3,8 @@
 /build-devuan/
 /out/
 /dist/
+/sgx-ddk16/build/
+/sgx-ddk16/dist/
 
 # Disk images (regenerable from CI)
 *.img

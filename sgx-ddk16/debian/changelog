@@ -1,0 +1,5 @@
+sgx-ddk16 (1.6.16.3977) unstable; urgency=medium
+
+  * Initial packaging scaffold.
+
+ -- Beagle B4 Recovery Project <noreply@example.invalid>  Thu, 10 Sep 2026 00:00:00 +0000

@@ -1,0 +1,82 @@
+# Audit and package the proprietary TI DDK 1.6 userspace without storing vendor
+# binaries in this repository. Binary artifact upload requires explicit consent.
+name: build-sgx-ddk16-packages
+
+on:
+  workflow_dispatch:
+    inputs:
+      sdk_url:
+        description: HTTPS URL for Graphics_SDK_setuplinux_4_03_00_02.bin
+        required: true
+        default: https://software-dl.ti.com/dsps/dsps_public_sw/sdo_sb/targetcontent/gfxsdk/4_03_00_02/exports/Graphics_SDK_setuplinux_4_03_00_02.bin
+        type: string
+      sdk_sha256:
+        description: Installer SHA-256 (zero value intentionally discovers it on first run)
+        required: true
+        default: "0000000000000000000000000000000000000000000000000000000000000000"
+        type: string
+      accept_ti_eula:
+        description: I have reviewed and accept the TI installer EULA
+        required: true
+        default: false
+        type: boolean
+      mode:
+        description: Pipeline stage
+        required: true
+        default: audit
+        type: choice
+        options:
+          - audit
+          - package
+      upload_ti_binary_artifacts:
+        description: Upload packages containing TI binaries (license review required)
+        required: true
+        default: false
+        type: boolean
+
+jobs:
+  build:
+    if: inputs.accept_ti_eula
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            make curl file binutils coreutils debhelper devscripts dpkg-dev \
+            gcc-arm-linux-gnueabihf patchelf
+
+      - name: Audit TI SDK userspace
+        working-directory: sgx-ddk16
+        env:
+          SDK_URL: ${{ inputs.sdk_url }}
+          SDK_SHA256: ${{ inputs.sdk_sha256 }}
+          ACCEPT_TI_EULA: "yes"
+        run: make audit
+
+      - name: Build Debian packages
+        if: inputs.mode == 'package'
+        working-directory: sgx-ddk16
+        env:
+          SDK_URL: ${{ inputs.sdk_url }}
+          SDK_SHA256: ${{ inputs.sdk_sha256 }}
+          ACCEPT_TI_EULA: "yes"
+        run: make package
+
+      - name: Upload ELF audit
+        uses: actions/upload-artifact@v5
+        with:
+          name: sgx-ddk16-elf-audit
+          path: sgx-ddk16/build/audit/
+          if-no-files-found: error
+
+      - name: Upload packages containing TI binaries
+        if: inputs.mode == 'package' && inputs.upload_ti_binary_artifacts
+        uses: actions/upload-artifact@v5
+        with:
+          name: sgx-ddk16-debs
+          path: sgx-ddk16/dist/*.deb
+          if-no-files-found: error
+          retention-days: 1

@@ -2,8 +2,8 @@
 
 Scope for a dedicated chat: replace the mismatched **ti343x** GLES userspace in the
 Devuan image with a **matched DDK 1.6 (`1.6.16.3977`)** userspace, packaged as a
-`.deb`. This doc is a map of *where the 1.17 userspace is installed today* and *where
-the 1.6 userspace lives* — not a build recipe.
+`.deb`. This doc is a map of _where the 1.17 userspace is installed today_ and _where
+the 1.6 userspace lives_ — not a build recipe.
 
 ## Why (the mismatch)
 
@@ -18,7 +18,7 @@ The Devuan GPU image is **mid-migration**:
   ukernel), installed by [rootfs/build-devuan.sh](../rootfs/build-devuan.sh).
 
 A 1.6 kernel module + a 1.17-era ukernel **fails the DDK-version check** in
-`SGXDevInitCompatCheck` (before core-rev even matters), so the image's *default* GLES
+`SGXDevInitCompatCheck` (before core-rev even matters), so the image's _default_ GLES
 userspace does not init against the 1.6 kernel. Stages 0–6 were validated with a
 **hand-placed softfp 1.6 bundle** (see below), not the image default.
 
@@ -26,13 +26,13 @@ userspace does not init against the 1.6 kernel. Stages 0–6 were validated with
 
 All in [rootfs/build-devuan.sh](../rootfs/build-devuan.sh), Phase 2:
 
-| What | Location |
-| --- | --- |
-| maemo-leste repo | [line 73](../rootfs/build-devuan.sh#L73): `deb https://maedevu.maemo.org/leste daedalus main` → `maemo.list` |
-| repo keys | [rootfs/keys-devuan/](../rootfs/keys-devuan/) `maemo-main-repo-key.asc`, `maemo-extras-key.asc` (dearmored into `trusted.gpg.d/`) |
-| the GLES userspace | [line 89](../rootfs/build-devuan.sh#L89): `apt install sgx-ddk-um-ti343x sgx-ddk-um-tools libgles2-mesa … kmscube drm-info` |
-| OpenRC postinst shim | ~line 82: `rc-update` stubbed (image is sysvinit, not OpenRC) |
-| service hook | [line 164](../rootfs/build-devuan.sh#L164): SysV `/etc/init.d/powervr` → `modprobe pvrsrvkm; modprobe dcnohw; /usr/bin/pvrsrvinit` |
+| What                     | Location                                                                                                                                                    |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| maemo-leste repo         | [line 73](../rootfs/build-devuan.sh#L73): `deb https://maedevu.maemo.org/leste daedalus main` → `maemo.list`                                                |
+| repo keys                | [rootfs/keys-devuan/](../rootfs/keys-devuan/) `maemo-main-repo-key.asc`, `maemo-extras-key.asc` (dearmored into `trusted.gpg.d/`)                           |
+| the GLES userspace       | [line 89](../rootfs/build-devuan.sh#L89): `apt install sgx-ddk-um-ti343x sgx-ddk-um-tools libgles2-mesa … kmscube drm-info`                                 |
+| OpenRC postinst shim     | ~line 82: `rc-update` stubbed (image is sysvinit, not OpenRC)                                                                                               |
+| service hook             | [line 164](../rootfs/build-devuan.sh#L164): SysV `/etc/init.d/powervr` → `modprobe pvrsrvkm; modprobe dcnohw; /usr/bin/pvrsrvinit`                          |
 | Mesa `omapdrm` DRI alias | [line 124](../rootfs/build-devuan.sh#L124)–141: builds `omapdrm_dri.so` from maemo `mesa_22.3.6+sgx2` (`-Dgallium-drivers=sgx -Dgallium-sgx-alias=omapdrm`) |
 
 What the two packages provide:
@@ -43,7 +43,7 @@ What the two packages provide:
 
 This maemo-leste deb is the **layout template** for the target: it shows the expected
 contents (GLES/EGL + ukernel + `pvrsrvinit` + WSEGL) and the init hook. It installs
-cleanly *because it is armhf/hardfp* — matching the Devuan armhf rootfs.
+cleanly _because it is armhf/hardfp_ — matching the Devuan armhf rootfs.
 
 ## Where to find the 1.6 userspace
 
@@ -54,13 +54,13 @@ build. See [docs/ddk16-dcnohw-presentation-plan.md](ddk16-dcnohw-presentation-pl
 
 **Staging paths used during Stages 0–6** (dev host / board):
 
-| Path | Contents |
-| --- | --- |
-| `/opt/ti-ddk16/runtime` | release runtime: `libGLESv2`, `libEGL`, `libsrv_um`, WSEGL (`libpvrPVR2D_FLIPWSEGL.so`), `pvrsrvinit`, ukernel |
-| `/opt/ti-ddk16/lib` | legacy init libc bundle (`ld-linux.so.3`) — used **only** to run `pvrsrvinit` |
+| Path                                           | Contents                                                                                                                                    |
+| ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/opt/ti-ddk16/runtime`                        | release runtime: `libGLESv2`, `libEGL`, `libsrv_um`, WSEGL (`libpvrPVR2D_FLIPWSEGL.so`), `pvrsrvinit`, ukernel                              |
+| `/opt/ti-ddk16/lib`                            | legacy init libc bundle (`ld-linux.so.3`) — used **only** to run `pvrsrvinit`                                                               |
 | `/opt/ti-ddk16/module/{pvrsrvkm.ko,dcnohw.ko}` | prebuilt modules — **do not ship**; use the kernel-tree modules from [kernel/build-devuan.sh](../kernel/build-devuan.sh) (correct vermagic) |
-| `/root/s16/gl` | `soak16` bundle's `gl/` dir: es2.x softfp GL libs **+ the 1.6 WSEGL** (`GL_ROOT` default in tools) |
-| `/opt/pandora-armel` | modern armel softfp libc (glibc 2.34+) — runs cross-built **probes** only; **not** part of the shipping userspace |
+| `/root/s16/gl`                                 | `soak16` bundle's `gl/` dir: es2.x softfp GL libs **+ the 1.6 WSEGL** (`GL_ROOT` default in tools)                                          |
+| `/opt/pandora-armel`                           | modern armel softfp libc (glibc 2.34+) — runs cross-built **probes** only; **not** part of the shipping userspace                           |
 
 **Archive tarballs** (contain the runtime + WSEGL):
 

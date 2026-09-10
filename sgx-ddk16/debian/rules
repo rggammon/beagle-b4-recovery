@@ -1,0 +1,11 @@
+#!/usr/bin/make -f
+
+%:
+	dh $@
+
+override_dh_auto_build:
+	$(MAKE) shims
+
+override_dh_auto_install:
+	@echo 'package staging is blocked on the verified DDK file manifest' >&2
+	exit 2
