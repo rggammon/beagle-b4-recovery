@@ -28,15 +28,13 @@ KMS/display investigation is in [BTT HDMI7 and OMAP DRM notes](btt-hdmi7-omapdrm
 
 ## Current Status
 
-**Active stage:** Stage 4. **Phase 4a validated (2026-09-09):** an SGX-rendered
-frame — a solid clear *and* a shader/VBO/depth triangle — reached the BTT-HDMI7
-through the zero-copy `dc_nohw → PRIME → omapdrm` path with the renderer
-**unmodified** (two-process `raw` present), then cleanly restored the console.
-Phase 4b (fuse render + present into one soft-float process) is next. Stage 3
-(KMS import + CPU-pattern scanout) is **validated** — the presenter scans a
-`dc_nohw` DMA-BUF out on the BTT-HDMI7 (DVI-D-1, 1024x600), **visually confirmed
-on the panel**, with a clean fbcon console restore on exit. Stages 1 (window
-surface) and 2 (DMA-BUF export) remain validated.
+**Active stage:** Stage 5 (transparent `sgxmode` presenter + `dc_nohw`
+swap-notify). **Stage 4 complete (2026-09-09):** an SGX-rendered frame — a solid
+clear _and_ a shader/VBO/depth triangle — reached the BTT-HDMI7 through the
+zero-copy `dc_nohw → PRIME → omapdrm` path, both as a two-process `raw` present
+(Phase 4a) and from a **single soft-float process** that renders and scans out
+itself (Phase 4b), each with a clean console restore. Stages 1–3 remain
+validated.
 
 **Original Stage 0 baseline:** passed for DDK 1.6 and, independently, DDK 1.4.
 
@@ -621,7 +619,7 @@ exiting.
 **Results (2026-09-09, `tools/dc_nohw_kms_present.c raw [s] [i]`):**
 
 - Fresh reload + `pvrsrvinit`, then `SGX_CLEAR=0xff3366cc SGX_SWAP=0
-  sgx-window-swap` (renderer `PowerVR SGX 530`) → a **solid blue** fill, and
+sgx-window-swap` (renderer `PowerVR SGX 530`) → a **solid blue** fill, and
   `SGX_TRIANGLE=1 SGX_DEPTH=1` (shader compile/link + VBO + depth) → a
   **multi-colour triangle on dark grey**. **Both visually confirmed on the
   BTT-HDMI7**, with a clean console restore.
@@ -632,12 +630,22 @@ exiting.
 - A single `SETCRTC` of one rendered frame — no `PAGE_FLIP` or continuous
   cadence yet. This retires the last visual risk before the single-process fuse.
 
-### Phase 4b: Single soft-float process
+### Phase 4b: Single soft-float process (VALIDATED)
 
-Fuse the Stage 1 renderer and the Stage 3 present code into **one soft-float
-process**: EGL renders into a `dc_nohw` buffer, and the same process imports it
-via DRM PRIME and scans it out with `SETCRTC` (the present code is float-free raw
-ioctls, rebuilt soft-float and called in-process).
+**Status: validated (2026-09-09).** Fuse the Stage 1 renderer and the Stage 3
+present code into **one soft-float process**: EGL renders into a `dc_nohw`
+buffer, and the same process imports it via DRM PRIME and scans it out with
+`SETCRTC` (the present code is float-free raw ioctls, built soft-float and called
+in-process).
+
+**Results (2026-09-09, `tools/sgx-window-swap.c` with `SGX_PRESENT=1`):** one
+`arm-linux-gnueabi` soft-float process rendered a `SGX_TRIANGLE=1 SGX_DEPTH=1`
+frame (shader + VBO + depth, `PowerVR SGX 530`), then **in-process** opened
+`/dev/dc_nohw_export`, exported back-buffer 1, `PRIME_FD_TO_HANDLE` → `ADDFB2` →
+`SETCRTC` on the connected CRTC, held 30 s, and restored the saved CRTC.
+**Visually confirmed on the BTT-HDMI7** (triangle on dark grey), clean exit. The
+renderer (pvrsrvkm/`dc_nohw`) and the presenter (omapdrm `card0`) coexist in one
+process with no conflict; default behaviour (no `SGX_PRESENT`) is unchanged.
 
 - Render one frame with the Stage 1 EGL path into a `dc_nohw` buffer.
 - `EXPORT_BUFFER` → `PRIME_FD_TO_HANDLE` → `ADDFB2` → `SETCRTC`, in-process.
@@ -647,10 +655,10 @@ ioctls, rebuilt soft-float and called in-process).
 ### Pass Criteria
 
 - An **SGX-rendered** frame (not a CPU fill) appears on the B4 panel — **met by
-  Phase 4a**; Phase 4b repeats it from a single process.
+  both phases** (4a two-process, 4b single soft-float process).
 - Clean teardown restores the console (save/restore CRTC as in Stage 3).
 - SGX completion and KMS commit latency are recorded separately.
-- (The `pfnPVRSRVCmdComplete` exactly-once *swap-command* coupling is exercised
+- (The `pfnPVRSRVCmdComplete` exactly-once _swap-command_ coupling is exercised
   in Stage 5, where flips route through `dc_nohw`; Stage 4 uses a direct
   `SETCRTC` and does not drive a `dc_nohw` flip.)
 
@@ -700,17 +708,16 @@ rules below apply throughout those stages.
 
 ## Immediate Next Actions
 
-1. **Phase 4a done (2026-09-09)** — `raw` present mode scans an SGX-rendered
-   `dc_nohw` buffer untouched; solid blue and a shader/VBO/depth triangle both
-   visually confirmed on the BTT-HDMI7 (present back-buffer index **1** for
-   `SGX_SWAP=0`), clean console restore.
-2. Phase 4b: rebuild the Stage 3 present code (`tools/dc_nohw_kms_present.c`)
-   soft-float and call it in-process from the soft-float EGL renderer (extend
-   `tools/sgx-window-swap.c`), so one process renders into a `dc_nohw` buffer and
-   scans it out; confirm the SGX pixels on the panel and a clean console restore.
-3. Checkpoint Stage 4, then begin Stage 5: add the `dc_nohw` swap-notify
-   (eventfd/poll: swapchain create/destroy + per-swap buffer/seq) and the
-   `sgxmode` presenter that flips on it while an **unmodified** game renders.
+1. **Stage 4 complete (2026-09-09).** Phase 4a (`raw` two-process present) and
+   Phase 4b (single soft-float `sgx-window-swap` with `SGX_PRESENT=1`) both put
+   an SGX-rendered triangle on the BTT-HDMI7 with a clean console restore
+   (present back-buffer index **1** for `SGX_SWAP=0`).
+2. Begin Stage 5: add the `dc_nohw` **swap-notify** (eventfd/poll: swapchain
+   create/destroy + per-swap buffer/seq) so the presenter learns which buffer
+   just completed without polling.
+3. Build the `sgxmode` presenter (DRM master + import `dc_nohw` buffers as FBs +
+   flip on swap-notify + pace on flip-done) and run an **unmodified** GLES app
+   (Stage 1 cube, then a game) through it.
 
 ## Explicit Non-Goals
 
