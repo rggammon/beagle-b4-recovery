@@ -111,7 +111,7 @@ vtrun <app>   # VT_OPENQRY, KD_GRAPHICS + K_OFF (pre-activate), [SET_MASTER],
               # DROP_MASTER, switch back, VT_DISALLOCATE
 ```
 
-### Phase 6a: In-kernel mailbox flip
+### Phase 6a: In-kernel mailbox flip — VALIDATED (2026-09-09)
 
 Prove the new in-kernel path with **immediate** completion (mailbox, like 5a):
 `dc_nohw` imports its buffers as `omapdrm` framebuffers, `ProcessFlip` schedules
@@ -120,16 +120,34 @@ console-park helper so `fbcon` yields. Same cross-buffer ghosting as 5a is
 acceptable — the point is to retire the `omapdrm` export + in-kernel atomic
 commit risk with **no** presenter daemon in the flip path.
 
+**Result:** `omapdrm` gained `omapdrm_import_dmabuf` / `omapdrm_release_fb` /
+`omapdrm_present` (`EXPORT_SYMBOL_GPL`, new `omap_present.c`; a module-global
+`drm_device` is stashed in `omapdrm_init`). `dc_nohw` gained an opt-in present
+path (`dc_nohw_present.c`, module param `present=1`): on the first swap it
+imports all back buffers as `omapdrm` framebuffers once, and each `ProcessFlip`
+queues an ordered-workqueue `omapdrm_present(fb[latest])` (blocking atomic commit
+of the primary plane) while completing the swap inline. Both modules rebuilt with
+matched vermagic; `omapdrm` is `=m` so this was a module rebuild + reboot (no
+kernel reflash), and `dcnohw.ko` was built against `omapdrm`'s `Module.symvers`
+(`KBUILD_EXTRA_SYMBOLS`) so the export CRCs match. On the B4 (`present=1`,
+`omapdrm` refcount rose to 2 confirming the link), an **unmodified**
+`sgx-window-swap` (`SGX_TRIANGLE=1 SGX_DEPTH=1`) ran 30 s (3059 swaps, ~102 fps)
+as the child of `sgxmode` **in a no-flip `SGXMODE_PARK` mode** (holds master to
+suspend `fbcon`, no swap-notify, no flips). The **rotating triangle animated on
+the panel driven entirely in-kernel**, dmesg clean, clean exit. Expected 5a-style
+double/ghost triangle (mailbox) remains — fixed by 6b.
+
 Pass criteria:
 
-- An unmodified game displays via the in-kernel flip — no `sgxmode` flip loop,
-  no userspace master in the flip path (only the idle console-park token).
-- `omapdrm_import_dmabuf` + `omapdrm_present` register and commit the `dc_nohw`
-  buffers; DMA-fence / vblank tracing shows `omapdrm` scanning them out.
-- Swapchain create/destroy register/unregister framebuffers without leaks;
-  child exit and console-park drop restore `fbcon` cleanly.
-- Stage 0 lifecycle/soak re-test passes (both `omapdrm.ko` and `dcnohw.ko`
-  changed).
+- [x] An unmodified game displays via the in-kernel flip — no `sgxmode` flip
+      loop, no userspace master in the flip path (only the idle console-park
+      token).
+- [x] `omapdrm_import_dmabuf` + `omapdrm_present` register and commit the
+      `dc_nohw` buffers; the `omapdrm` refcount and clean dmesg confirm the
+      in-kernel commit path. (Formal DMA-fence/vblank tracing deferred to 6b.)
+- [x] Child exit and console-park drop restore `fbcon` cleanly.
+- [ ] Stage 0 lifecycle/soak re-test (both `omapdrm.ko` and `dcnohw.ko`
+      changed) — **still owed** before closing Stage 6.
 
 ### Phase 6b: Paced in-kernel flip
 

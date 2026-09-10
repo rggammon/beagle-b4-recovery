@@ -92,6 +92,33 @@ int main(int argc, char **argv)
         return 2;
     }
 
+    /*
+     * Console-park mode (Stage 6a): hold DRM master (suspends fbcon) and run
+     * the app as a child while an in-kernel presenter (dc_nohw present=1)
+     * drives the primary plane. No swap-notify, no flips here.
+     */
+    if (getenv("SGXMODE_PARK")) {
+        int st;
+        g_card = open("/dev/dri/card0", O_RDWR | O_CLOEXEC);
+        if (g_card < 0) { perror("open card0"); return 1; }
+        if (cardctl(DRM_IOCTL_SET_MASTER, NULL, "SET_MASTER"))
+            fprintf(stderr, "warning: not DRM master\n");
+        fprintf(stderr, "sgxmode: PARK master held; launching app\n");
+        child = fork();
+        if (child < 0) { perror("fork"); return 1; }
+        if (child == 0) {
+            execvp(argv[argstart], &argv[argstart]);
+            perror("execvp");
+            _exit(127);
+        }
+        while (waitpid(child, &st, 0) < 0 && errno == EINTR)
+            ;
+        cardctl(DRM_IOCTL_DROP_MASTER, NULL, "DROP_MASTER");
+        close(g_card);
+        fprintf(stderr, "sgxmode: PARK clean exit\n");
+        return 0;
+    }
+
     ctrl = open("/dev/dc_nohw_export", O_RDONLY | O_CLOEXEC);
     if (ctrl < 0) { perror("open dc_nohw_export"); return 1; }
     if (ioctl(ctrl, DC_NOHW_EXPORT_SUBSCRIBE)) { perror("SUBSCRIBE"); return 1; }

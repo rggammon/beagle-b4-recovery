@@ -28,8 +28,15 @@ KMS/display investigation is in [BTT HDMI7 and OMAP DRM notes](btt-hdmi7-omapdrm
 
 ## Current Status
 
-**Active stage:** Stage 6a (in-kernel `omapdrm_present`, mailbox). **Phase 5a
-VALIDATED (2026-09-09):** an **unmodified**
+**Active stage:** Stage 6b (paced in-kernel flip). **Phase 6a VALIDATED
+(2026-09-09):** the flip loop moved **in-kernel** — `dc_nohw`'s `ProcessFlip`
+drives `omapdrm_present` (exported `EXPORT_SYMBOL_GPL`) directly, so an
+**unmodified** `sgx-window-swap` animated on the BTT-HDMI7 (3059 swaps/30 s,
+rotating triangle, same expected mailbox ghosting) with **no presenter daemon in
+the flip path** — `sgxmode` only parked DRM master to suspend `fbcon`. `omapdrm`
+refcount confirmed dc_nohw drives it; dmesg clean. Next: Phase 6b (hold
+completion until vblank flip-done → pacing, ghosting gone). **Phase 5a VALIDATED
+(2026-09-09):** an **unmodified**
 `sgx-window-swap` animated on the panel through the `dc_nohw` swap-notify →
 `sgxmode` `PAGE_FLIP` path (3110 swaps/30 s, rotating triangle, expected mailbox
 ghosting) — first transparent presentation of an unmodified app. **Decision
