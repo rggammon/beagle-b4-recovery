@@ -7,8 +7,9 @@
 # Then graft the 7.2 SGX kernel modules (pvrsrvkm) + a small overlay, and make an ext4.
 #
 # The GPU userspace is Imagination's closed DDK (sgx-ddk-um-ti343x, core rev 1.2.1) from
-# maemo-leste; the kernel side (pvrsrvkm) is grafted from kernel/build-devuan.sh, and the
-# core-rev whitelist patch lets the 1.2.1 ukernel run on the B4 1.0.3 silicon.
+# maemo-leste; the kernel side (pvrsrvkm) is grafted from kernel/build-devuan.sh. NOTE:
+# the kernel is now DDK 1.6, so this ti343x userspace (DDK 1.17-era) is mismatched and
+# pending migration to a matched 1.6 GLES userspace packaged as a .deb (tracked separately).
 #
 # NO swap is baked in -- add it on the board later (e.g. a swapfile or a USB stick).
 #

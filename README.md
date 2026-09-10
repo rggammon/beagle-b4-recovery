@@ -265,21 +265,19 @@ lives in its own image:
 - **Kernel** (`kernel/build-devuan.sh`): the **OpenPVRSGX** `linux+pvrsgx` tree (Linux
   7.2) with the `pvrsrvkm` SGX530 driver built as a module, plus the same
   `omap3-beagle-ab4.dtb` timer fix and all four recovery-kernel hardware patches.
-  Beyond the DDK core-rev patch below, this includes the provisional `0002` MMC
-  workaround described above. The DDK sources are committed on that branch, so a plain
-  clone builds it.
+  This also includes the provisional `0002` MMC workaround described above. The DDK
+  sources are committed on that branch, so a plain clone builds it.
 - **Userspace** (`rootfs/build-devuan.sh`): Devuan daedalus (glibc, sysvinit) + the
   maemo-leste **ti343x DDK** (`sgx-ddk-um-ti343x`) and Mesa's `pvr` DRI loader.
   `usbutils` (`lsusb`) and `ethtool` are included for network bring-up diagnostics.
   Bootstrapped with a two-phase `mmdebstrap` so only the GLES stack is pulled in, not
   the Hildon desktop.
-- **The B4 catch — and the one patch that fixes it:** this early board's SGX530 reports
-  silicon **core revision 1.0.3** (`0x10003`), but the only available ti343x ukernel is
-  built for **1.2.1** (`0x10201`), so the DDK's `SGXDevInitCompatCheck()` refuses to init
-  with `PVRSRV_ERROR_BUILD_MISMATCH`.
-  `kernel/patches-devuan/0005-pvrsgx-corerev-b4-exception.patch` adds our `(hw, sw)` pair
-  to the DDK's built-in `aui32CoreRevExceptions[]` whitelist, so the check is skipped for
-  _exactly_ this combination while any other genuine mismatch still fails.
+- **GPU userspace is mid-migration:** the kernel is now DDK **1.6**, which compiles its
+  own core-matched ukernel, so `SGXDevInitCompatCheck()` passes with **no** core-revision
+  exception patch. The closed GLES **userspace** installed above is still the older
+  maemo-leste `ti343x` package (DDK 1.17-era, `1.2.1` ukernel), which predates the 1.6
+  kernel switch; packaging a matched 1.6 GLES userspace as a `.deb` and aligning it with
+  the kernel is tracked separately.
 - **Verified on hardware:** a surfaceless GLES2 render reports
   `GL_RENDERER = "PowerVR SGX 530"` with correct pixel read-back (`tools/sgx-render-test.c`
   is a self-contained `dlopen` EGL/GLES2 probe — no headers or network needed).
