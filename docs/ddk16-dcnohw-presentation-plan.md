@@ -28,9 +28,12 @@ KMS/display investigation is in [BTT HDMI7 and OMAP DRM notes](btt-hdmi7-omapdrm
 
 ## Current Status
 
-**Active stage:** Stage 4 (single-process pixel proof — an SGX-rendered frame
-scanned out in one soft-float process). Stage 3 (KMS import + CPU-pattern
-scanout) is **validated** — the presenter scans a
+**Active stage:** Stage 4. **Phase 4a validated (2026-09-09):** an SGX-rendered
+frame — a solid clear *and* a shader/VBO/depth triangle — reached the BTT-HDMI7
+through the zero-copy `dc_nohw → PRIME → omapdrm` path with the renderer
+**unmodified** (two-process `raw` present), then cleanly restored the console.
+Phase 4b (fuse render + present into one soft-float process) is next. Stage 3
+(KMS import + CPU-pattern scanout) is **validated** — the presenter scans a
 `dc_nohw` DMA-BUF out on the BTT-HDMI7 (DVI-D-1, 1024x600), **visually confirmed
 on the panel**, with a clean fbcon console restore on exit. Stages 1 (window
 surface) and 2 (DMA-BUF export) remain validated.
@@ -194,7 +197,7 @@ per accepted command, including controlled shutdown and error paths.
 `dc_nohw` is the **permanent** bridge between the closed DDK's DisplayClass
 interface and modern DRM/KMS: the SGX blob only speaks DisplayClass, so
 `dc_nohw` stays the DisplayClass provider while `omapdrm` owns the display
-hardware. It is *not* `omaplfb` (the old PVR→fbdev bridge, a non-goal) and not
+hardware. It is _not_ `omaplfb` (the old PVR→fbdev bridge, a non-goal) and not
 `omapfb` (obsolete fbdev). The one CMA allocation `dc_nohw` makes is **shared,
 not copied** — DMA-BUF export/import passes a reference (refcount) and DRM PRIME
 (`PRIME_FD_TO_HANDLE`) imports the same physical pages `omapdrm`/DISPC scans out.
@@ -600,36 +603,66 @@ Pass criteria:
   `dc_nohw` buffers while `sgxmode` owns the display.
 - Tool: `tools/dc_nohw_kms_present.c` (hard-float, raw ioctls).
 
-## Stage 4: Single-Process Pixel Proof
+## Stage 4: SGX-Rendered Pixel Proof
 
-**Gated on Stage 3.** Prove the whole pixel path in **one soft-float process**:
-EGL renders a frame into a `dc_nohw` swapchain buffer, the same process imports
-that buffer via DRM PRIME and scans it out with `SETCRTC`. This fuses the Stage 1
-renderer and the Stage 3 present code (rebuilt soft-float — the DRM path is
-float-free raw ioctls) to confirm an SGX-rendered frame reaches the panel, before
-any presenter, swap-notify, or continuous flipping exists.
+**Gated on Stage 3.** Prove that **SGX-rendered** pixels (not a CPU fill) reach
+the panel through the zero-copy `dc_nohw → PRIME → omapdrm` path. Split into a
+cheap two-process proof (4a, validated) and the single soft-float process (4b).
+
+### Phase 4a: Two-process proof (VALIDATED — SGX on screen)
+
+**Status: validated — SGX pixels on the panel (2026-09-09).** Reuses the
+existing hard-float presenter with a new `raw` mode (`import` minus the CPU
+fill): the unmodified Stage 1 renderer draws into a `dc_nohw` back buffer and
+exits, then the presenter imports that buffer **untouched** and scans it out.
+Because the back buffers are module-scope, the render survives the renderer
+exiting.
+
+**Results (2026-09-09, `tools/dc_nohw_kms_present.c raw [s] [i]`):**
+
+- Fresh reload + `pvrsrvinit`, then `SGX_CLEAR=0xff3366cc SGX_SWAP=0
+  sgx-window-swap` (renderer `PowerVR SGX 530`) → a **solid blue** fill, and
+  `SGX_TRIANGLE=1 SGX_DEPTH=1` (shader compile/link + VBO + depth) → a
+  **multi-colour triangle on dark grey**. **Both visually confirmed on the
+  BTT-HDMI7**, with a clean console restore.
+- **Buffer index:** with `SGX_SWAP=0` the EGL back buffer maps to `dc_nohw`
+  `asBackBuffers[1]`, not 0 — `dc_nohw_export_test` readback showed buf0/buf2 =
+  `0x00000000` and buf1 = `0xff3366cc`. Present index 1:
+  `dc_nohw_kms_present raw 30 1`.
+- A single `SETCRTC` of one rendered frame — no `PAGE_FLIP` or continuous
+  cadence yet. This retires the last visual risk before the single-process fuse.
+
+### Phase 4b: Single soft-float process
+
+Fuse the Stage 1 renderer and the Stage 3 present code into **one soft-float
+process**: EGL renders into a `dc_nohw` buffer, and the same process imports it
+via DRM PRIME and scans it out with `SETCRTC` (the present code is float-free raw
+ioctls, rebuilt soft-float and called in-process).
 
 - Render one frame with the Stage 1 EGL path into a `dc_nohw` buffer.
 - `EXPORT_BUFFER` → `PRIME_FD_TO_HANDLE` → `ADDFB2` → `SETCRTC`, in-process.
-- Read back the exact SGX-produced pixels on screen (a known clear colour or the
-  Stage 1 triangle), not a CPU pattern.
+- Show the exact SGX-produced pixels (clear colour or triangle), not a CPU
+  pattern.
 
 ### Pass Criteria
 
-- An **SGX-rendered** frame (not a CPU fill) appears on the B4 panel.
-- The buffer-state protocol holds; `pfnPVRSRVCmdComplete` fires exactly once for
-  the presented frame.
+- An **SGX-rendered** frame (not a CPU fill) appears on the B4 panel — **met by
+  Phase 4a**; Phase 4b repeats it from a single process.
 - Clean teardown restores the console (save/restore CRTC as in Stage 3).
 - SGX completion and KMS commit latency are recorded separately.
+- (The `pfnPVRSRVCmdComplete` exactly-once *swap-command* coupling is exercised
+  in Stage 5, where flips route through `dc_nohw`; Stage 4 uses a direct
+  `SETCRTC` and does not drive a `dc_nohw` flip.)
 
 ### Scope notes
 
-- **Single process, no IPC.** Stage 4 deliberately avoids a separate presenter
-  and any hand-off: it is the minimal proof that SGX pixels can be scanned out.
-  Continuous, swap-driven flipping with an unmodified game moves to Stage 5.
-- The present code is the Stage 3 tool rebuilt soft-float and called in-process
-  (no hard-float presenter — the DisplayClass/KMS boundary stays documented, but
-  it is now a function-call boundary inside one soft-float binary).
+- **No IPC.** Stage 4 avoids a separate presenter and any hand-off: it is the
+  minimal proof that SGX pixels can be scanned out. Continuous, swap-driven
+  flipping with an unmodified game moves to Stage 5.
+- The present code is the Stage 3 tool's raw ioctls rebuilt soft-float and called
+  in-process (no hard-float presenter — the DisplayClass/KMS boundary stays
+  documented, but it is now a function-call boundary inside one soft-float
+  binary).
 
 ## Later Stages (5–8)
 
@@ -667,16 +700,15 @@ rules below apply throughout those stages.
 
 ## Immediate Next Actions
 
-1. Stage 4: rebuild the Stage 3 present code (`tools/dc_nohw_kms_present.c`)
-   soft-float and call it in-process from a soft-float EGL renderer (extend the
-   Stage 1 `sgx-window-swap` tool), so one process renders into a `dc_nohw`
-   buffer and scans it out.
-2. Render a known SGX frame (clear colour or the Stage 1 triangle), then
-   `EXPORT_BUFFER` → `PRIME_FD_TO_HANDLE` → `ADDFB2` → `SETCRTC` in the same
-   process; confirm the **SGX-produced** pixels appear on the panel.
-3. Verify `pfnPVRSRVCmdComplete` fires exactly once and the console restores on
-   exit (save/restore CRTC as in Stage 3).
-4. Checkpoint Stage 4, then begin Stage 5: add the `dc_nohw` swap-notify
+1. **Phase 4a done (2026-09-09)** — `raw` present mode scans an SGX-rendered
+   `dc_nohw` buffer untouched; solid blue and a shader/VBO/depth triangle both
+   visually confirmed on the BTT-HDMI7 (present back-buffer index **1** for
+   `SGX_SWAP=0`), clean console restore.
+2. Phase 4b: rebuild the Stage 3 present code (`tools/dc_nohw_kms_present.c`)
+   soft-float and call it in-process from the soft-float EGL renderer (extend
+   `tools/sgx-window-swap.c`), so one process renders into a `dc_nohw` buffer and
+   scans it out; confirm the SGX pixels on the panel and a clean console restore.
+3. Checkpoint Stage 4, then begin Stage 5: add the `dc_nohw` swap-notify
    (eventfd/poll: swapchain create/destroy + per-swap buffer/seq) and the
    `sgxmode` presenter that flips on it while an **unmodified** game renders.
 
