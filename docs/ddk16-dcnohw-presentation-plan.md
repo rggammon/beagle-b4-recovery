@@ -672,14 +672,100 @@ process with no conflict; default behaviour (no `SGX_PRESENT`) is unchanged.
   documented, but it is now a function-call boundary inside one soft-float
   binary).
 
-## Later Stages (5–8)
+## Stage 5: Transparent Userspace Presenter (`sgxmode`)
 
-**Gated on Stage 4.** The transparent presenter, the in-kernel flip endgame,
-application validation, and packaging live in the satellite so this plan stays
-focused on the active stage:
+**Gated on Stage 4.** Run an **unmodified** GLES app while a separate userspace
+presenter, `sgxmode`, owns the display and flips on every swap. `sgxmode` is the
+"X server" role; `dc_nohw` stays a buffer provider and gains **one** new kernel
+capability — a **swap notifier**. This is the first driver change since Stage 2,
+so it carries the vermagic/build discipline and a Stage 0 re-test.
 
-- [Presentation later stages (5–8)](ddk16-presentation-stages-5-8.md) — Stage 5
-  `sgxmode` userspace presenter + `dc_nohw` swap-notify (unmodified game), Stage 6
+Stage 4 is the seed: `sgxmode`'s flip loop is Stage 4b's
+`present_dc_nohw_buffer()` generalised — import every `dc_nohw` buffer as a
+framebuffer **once**, then `PAGE_FLIP` to `fb[K]` on each swap. Stage 4 also
+showed *why* the notifier is needed: userspace cannot guess which back buffer a
+swap landed in (Stage 4 hard-coded index 1 for `SGX_SWAP=0`); the driver must
+say so.
+
+### The swap-notify (the one new `dc_nohw` capability)
+
+`dc_nohw` already owns `/dev/dc_nohw_export`. Make it **pollable** and add a swap
+event stream — no new device, no DRM master, no `drm_client`:
+
+- `DC_NOHW_EXPORT_SUBSCRIBE` (ioctl) — arm notifications for this fd.
+- `poll()` / `read()` — fixed-size event records:
+  - `{ SWAPCHAIN_CREATE, buffer_count, width, height, stride, fourcc }`
+  - `{ SWAPCHAIN_DESTROY }`
+  - `{ SWAP, buffer_index K, sequence N }` — emitted from `dc_nohw`'s flip
+    handler when the game calls `eglSwapBuffers`.
+- `DC_NOHW_EXPORT_FLIP_DONE { sequence N }` (ioctl, Phase 5b only) — the
+  presenter reports its KMS flip-done so `dc_nohw` can complete the matching
+  DisplayClass swap command (buffer → `FREE`).
+
+The hook point is `ProcessFlip` in `dc_nohw_displayclass.c` — today it completes
+the swap immediately (no hardware). The notifier emits the `SWAP` record there;
+completion **timing** is what distinguishes 5a from 5b.
+
+### `sgxmode` (userspace, DRM master)
+
+- Runs on its own VT and self-manages it like X: `KDSETMODE KD_GRAPHICS` +
+  `KDSKBMODE K_OFF`, restored on exit. Launched via stock
+  `openvt -s -w -- sgxmode <game>`; `fbcon` stays on the other VTs.
+- Opens `/dev/dri/card0`, `SET_MASTER` (suspends `fbcon`), saves the CRTC.
+- Subscribes to the swap-notify; on `SWAPCHAIN_CREATE` imports each `dc_nohw`
+  buffer once (`PRIME_FD_TO_HANDLE` + `ADDFB2`) into `fb_id[]`.
+- On each `SWAP{K,N}`: `PAGE_FLIP` to `fb_id[K]` (`SETCRTC` for the first).
+- On `SWAPCHAIN_DESTROY` / child exit: `RMFB`, restore CRTC, `DROP_MASTER`,
+  restore VT — `fbcon` resumes. The kernel auto-drops master on crash, so the
+  console always comes back.
+
+### Phase 5a: Free-running mailbox prototype
+
+`dc_nohw` completes each swap **immediately** (as today); `sgxmode` presents the
+**latest** completed buffer on each vblank and coalesces (skips) intermediate
+swaps it could not keep up with (mailbox). The game runs at its own rate; the
+panel shows the newest frame. This is the "unmodified game on screen at all"
+milestone — no back-pressure, minimal driver change (just emit `SWAP`).
+
+Pass criteria:
+
+- The **unmodified** Stage 1 cube/triangle (`sgx-window-swap`, default
+  `SGX_SWAP=1`), then a real game, animates on the panel — no source changes.
+- `PAGE_FLIP` is vblank-synced (no tearing on the presented buffer).
+- Swapchain create/destroy and child exit are clean; `fbcon` restores.
+
+### Phase 5b: Paced presentation (buffer-state protocol)
+
+Couple completion to scanout: `dc_nohw` holds the swap command until the
+presenter's `FLIP_DONE{N}` reports the buffer finished `SCANNING`, so the
+`FREE → RENDERING → READY → QUEUED → SCANNING → FREE` protocol holds and the game
+is paced to the display (no overwrite-while-scanning, vsync back-pressure).
+
+Pass criteria:
+
+- Flips are paced to the panel (flip-done); no tearing, no premature buffer
+  reuse; the buffer-state protocol holds.
+- `pfnPVRSRVCmdComplete` fires exactly once per swap, at flip-done.
+- SGX completion, swap-notify latency, and KMS flip latency are recorded
+  separately; a sustained multi-minute run stays memory-flat with no recovery.
+
+### Scope notes
+
+- **One panel app at a time** (single master, no arbitration). `sgxmode`
+  launches the game as its child so lifecycle is bound.
+- **Driver discipline:** the swap-notify is a `dc_nohw` change — rebuild
+  `dcnohw.ko` with matched vermagic, redeploy, and re-run the Stage 0
+  lifecycle/soak guard (load/unload cycles, IRQ 37, no leak/recovery).
+- `sgxmode`'s per-notify flip code is the **Stage 6 prototype**: the same
+  register-once / flip-`fb[K]` / pace-on-done mechanics move into `dc_nohw`'s
+  `ProcessFlip` via `omapdrm_present` (ioctl sequence ↔ exported call, 1:1).
+
+## Later Stages (6–8)
+
+**Gated on Stage 5.** The in-kernel flip endgame, application validation, and
+packaging live in the satellite so this plan stays focused on the active stage:
+
+- [Presentation later stages (6–8)](ddk16-presentation-stages-6-8.md) — Stage 6
   in-kernel `omapdrm_present` endgame + generic `vtrun` launcher, Stage 7
   application validation (OpenQuartz/GLQuake, soft-float), Stage 8 packaging.
 

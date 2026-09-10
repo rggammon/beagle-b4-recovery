@@ -1,60 +1,17 @@
-# OMAP3 SGX103 DDK 1.6 Presentation — Later Stages (5–8)
+# OMAP3 SGX103 DDK 1.6 Presentation — Later Stages (6–8)
 
 Satellite of the [DDK 1.6 `dc_nohw` presentation plan](ddk16-dcnohw-presentation-plan.md).
 
-These stages are **gated on Stage 4** — the single-process pixel proof (an
-SGX-rendered frame scanned out on the B4 panel; Stages 0–4 live in the main
-plan). They are kept out of the main plan so it stays focused on the active
-stage. The architecture (DisplayClass↔DRM layering, display-ownership invariant,
-buffer-state protocol), Handoff Card, and engineering rules live in the main plan
-and apply throughout.
+These stages are **gated on Stage 5** — the transparent userspace presenter
+(`sgxmode`) driving an **unmodified** game via the `dc_nohw` swap-notify (Stages
+0–5 live in the main plan). They are kept out of the main plan so it stays
+focused on the active stage. The architecture (DisplayClass↔DRM layering,
+display-ownership invariant, buffer-state protocol), Handoff Card, and
+engineering rules live in the main plan and apply throughout.
 
-The through-line: an **unmodified** OpenGL game only calls `eglSwapBuffers`, so
-presentation must be **transparent** — triggered by the game's own swap, never by
-game cooperation. Stage 5 does this in userspace (debuggable); Stage 6 moves the
-flip in-kernel (daemonless endgame). Stage 5's flip loop is the working prototype
-of Stage 6's `omapdrm_present`.
-
-## Stage 5: Transparent Userspace Presenter (`sgxmode`)
-
-Run the game **unmodified** while a separate userspace presenter, `sgxmode`,
-owns the display and flips on every swap. `sgxmode` is the "X server" role;
-`dc_nohw` stays a buffer provider and gains one new capability — a **swap
-notifier**.
-
-**The one new kernel piece — `dc_nohw` swap-notify.** `dc_nohw` exposes an
-eventfd/poll interface reporting swapchain lifecycle (create/destroy, geometry,
-buffer count) and, per swap, "buffer index K, sequence N". It reports; it never
-becomes a DRM master or `drm_client`.
-
-**`sgxmode` (userspace, DRM master).**
-
-- Runs on its own VT and self-manages it like X: `KDSETMODE KD_GRAPHICS` +
-  `KDSKBMODE K_OFF`, restored on exit. Launched via stock `openvt -s -w --
-  sgxmode …`. `fbcon` is kept (startx-style: text consoles on the other VTs, the
-  game on this graphics VT).
-- Opens `/dev/dri/card0`, `SET_MASTER` (suspends `fbcon`).
-- On swapchain-create: imports each `dc_nohw` CMA buffer once
-  (`PRIME_FD_TO_HANDLE` + `ADDFB2`) into a small `fb_id[]` table.
-- On each swap-notify: `PAGE_FLIP` (or `SETCRTC` for the first) to `fb_id[K]`.
-- Paces on the flip-done event before acknowledging the next swap.
-- On swapchain-destroy / exit: `RMFB`, `DROP_MASTER`, restore VT — `fbcon`
-  resumes.
-
-`dc_nohw` completes the DisplayClass flip command (`pfnPVRSRVCmdComplete`) when
-its buffer is reusable, coupled to the presenter's flip-done via the swap-notify
-acknowledgement.
-
-### Pass Criteria
-
-- An **unmodified** GLES app (Stage 1 cube, then a real game) displays on the
-  panel with no source changes.
-- Flips are paced to the panel (flip-done), no tearing, no premature buffer
-  reuse; the buffer-state protocol holds.
-- Swapchain create/destroy and process exit are clean; `fbcon` restores.
-- SGX completion, swap-notify latency, and KMS flip latency are recorded
-  separately.
-- Only one fullscreen app owns the panel at a time (single master).
+Stage 6 moves the flip **in-kernel** (daemonless endgame); Stage 5's userspace
+flip loop is its working prototype. Stage 7 validates a real game unchanged;
+Stage 8 packages the appliance.
 
 ## Stage 6: In-Kernel Flip Endgame (`omapdrm_present`)
 
@@ -93,8 +50,8 @@ call.
 `drm_client`; there is no clean in-kernel arbitration against `dc_nohw`'s
 commits. Two options:
 
-- **6a (bring-up):** a tiny userspace helper holds DRM master as a *parking
-  token* (no flips) for the app's lifetime — `SET_MASTER` suspends `fbcon`; the
+- **6a (bring-up):** a tiny userspace helper holds DRM master as a _parking
+  token_ (no flips) for the app's lifetime — `SET_MASTER` suspends `fbcon`; the
   driver's in-kernel commit bypasses the master check and still drives pixels;
   `DROP_MASTER` on exit restores the console. Keeps a console fallback on the
   other VTs.
