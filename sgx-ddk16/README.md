@@ -22,10 +22,9 @@ Alternatively, set `SDK_URL` instead of `SDK_INSTALLER`. A verified SHA-256 is
 required in both modes. Outputs are confined to ignored `build/` and `dist/`
 directories.
 
-The workflow defaults to the official TI `4_03_00_02` URL and an intentionally
-invalid all-zero checksum. Its first run fails before extraction and prints the
-downloaded file's actual SHA-256. Review that value independently, then replace
-the workflow input with it for the audit run.
+The workflow defaults to the official TI `4_03_00_02` URL and the SHA-256
+`cdb0bd3964e107733d632aa8224e0537b05c1ffac34befc036423458c8d75255`,
+confirmed by the initial checksum-discovery run.
 
 Run `make help` for all targets.
 

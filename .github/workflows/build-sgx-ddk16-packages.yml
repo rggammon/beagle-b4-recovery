@@ -11,9 +11,9 @@ on:
         default: https://software-dl.ti.com/dsps/dsps_public_sw/sdo_sb/targetcontent/gfxsdk/4_03_00_02/exports/Graphics_SDK_setuplinux_4_03_00_02.bin
         type: string
       sdk_sha256:
-        description: Installer SHA-256 (zero value intentionally discovers it on first run)
+        description: Verified SHA-256 of the TI installer
         required: true
-        default: "0000000000000000000000000000000000000000000000000000000000000000"
+        default: "cdb0bd3964e107733d632aa8224e0537b05c1ffac34befc036423458c8d75255"
         type: string
       accept_ti_eula:
         description: I have reviewed and accept the TI installer EULA
