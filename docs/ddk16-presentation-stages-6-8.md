@@ -2,9 +2,11 @@
 
 Satellite of the [DDK 1.6 `dc_nohw` presentation plan](ddk16-dcnohw-presentation-plan.md).
 
-These stages are **gated on Stage 5** — the transparent userspace presenter
+These stages continue after **Stage 5** — the transparent userspace presenter
 (`sgxmode`) driving an **unmodified** game via the `dc_nohw` swap-notify (Stages
-0–5 live in the main plan). They are kept out of the main plan so it stays
+0–5 live in the main plan). **Stage 6 is complete (2026-09-10):** both Phase 6a
+(in-kernel mailbox) and Phase 6b (paced, ghost-free) are validated and the
+Stage 0 soak re-test passed. They are kept out of the main plan so it stays
 focused on the active stage. The architecture (DisplayClass↔DRM layering,
 display-ownership invariant, buffer-state protocol), Handoff Card, and
 engineering rules live in the main plan and apply throughout.
@@ -153,7 +155,7 @@ Pass criteria:
 
 Add vblank pacing: `ProcessFlip` does **not** complete inline; instead it defers
 the swap to a FIFO worker that does a **blocking** `omapdrm_present` (the flip)
-and then completes the swap — freeing the *previously* displayed buffer, now
+and then completes the swap — freeing the _previously_ displayed buffer, now
 off-screen. So the game paces to vblank and the
 `FREE → RENDERING → READY → QUEUED → SCANNING → FREE` buffer-state protocol holds.
 Ghosting is gone.
@@ -161,7 +163,7 @@ Ghosting is gone.
 **Result:** `present` became an int param (`0`=off, `1`=mailbox/6a, `2`=paced/6b).
 The paced worker imports the `dc_nohw` buffers as `omapdrm` framebuffers once,
 and per swap: blocking-commit `fb[index]`, then `DCNohwCompleteFlip(cookie)`
-(complete-current, *not* off-by-one — completing after the flip frees the
+(complete-current, _not_ off-by-one — completing after the flip frees the
 off-screen previous buffer, so no reuse-while-scanning, no deadlock). An
 **unmodified** `sgx-window-swap` showed a **clean single rotating triangle (no
 ghost)** at ~59 fps (paced to the 60 Hz panel), clean exit, `dcnohw` unloadable,
@@ -173,7 +175,7 @@ dmesg clean.
   (`owner=THIS_MODULE`), pinning `dcnohw`. Releasing fbs on **swapchain-destroy**
   (`DCNohwPresentFlush`), not at module unload, keeps `dcnohw` `rmmod`-able
   (buffers are module-scope, re-imported next session).
-- **completion deadlock** — an off-by-one attempt (complete *previous*) withheld
+- **completion deadlock** — an off-by-one attempt (complete _previous_) withheld
   the last swap's completion → the game hung in `eglSwapBuffers`. Completing the
   **current** swap right after its blocking commit is both tear-free and
   deadlock-free.

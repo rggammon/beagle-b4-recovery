@@ -821,14 +821,16 @@ Pass criteria:
   register-once / flip-`fb[K]` / pace-on-done mechanics move into `dc_nohw`'s
   `ProcessFlip` via `omapdrm_present` (ioctl sequence ↔ exported call, 1:1).
 
-## Later Stages (6–8)
+## Later Stages (7–8)
 
-**Gated on Stage 5.** The in-kernel flip endgame, application validation, and
-packaging live in the satellite so this plan stays focused on the active stage:
+**Stage 6 complete (2026-09-10).** The in-kernel flip endgame is validated and
+soak-passed (Phases 6a mailbox + 6b paced). The remaining application-validation
+and packaging stages live in the satellite:
 
 - [Presentation later stages (6–8)](ddk16-presentation-stages-6-8.md) — Stage 6
-  in-kernel `omapdrm_present` endgame + generic `vtrun` launcher, Stage 7
-  application validation (OpenQuartz/GLQuake, soft-float), Stage 8 packaging.
+  in-kernel `omapdrm_present` endgame + generic `vtrun` launcher (**done**),
+  Stage 7 application validation (OpenQuartz/GLQuake, soft-float), Stage 8
+  packaging.
 
 The architecture, ownership invariant, buffer-state protocol, and engineering
 rules below apply throughout those stages.
@@ -855,16 +857,17 @@ rules below apply throughout those stages.
 
 ## Immediate Next Actions
 
-1. **Stage 4 complete (2026-09-09).** Phase 4a (`raw` two-process present) and
-   Phase 4b (single soft-float `sgx-window-swap` with `SGX_PRESENT=1`) both put
-   an SGX-rendered triangle on the BTT-HDMI7 with a clean console restore
-   (present back-buffer index **1** for `SGX_SWAP=0`).
-2. Begin Stage 5: add the `dc_nohw` **swap-notify** (eventfd/poll: swapchain
-   create/destroy + per-swap buffer/seq) so the presenter learns which buffer
-   just completed without polling.
-3. Build the `sgxmode` presenter (DRM master + import `dc_nohw` buffers as FBs +
-   flip on swap-notify + pace on flip-done) and run an **unmodified** GLES app
-   (Stage 1 cube, then a game) through it.
+1. **Stage 6 complete (2026-09-10).** In-kernel `omapdrm_present` validated as
+   Phase 6a (mailbox) and Phase 6b (paced, ghost-free), the Stage 0 soak re-test
+   passed (7 load/unload cycles + a 180 s paced run, memory flat, IRQ 37 rising,
+   zero crash/recovery), and the game-representative GLES coverage (texture
+   upload+sampling, indexed draws, blending) runs clean via the paced path.
+2. **Stage 7:** bring up a real soft-float game (OpenQuartz/GLQuake) through the
+   `present=2` path — compile the game soft-float from source, wire its EGL/GLES
+   entry point to the `dc_nohw` window surface, and validate a sustained run.
+3. **Stage 8 hardening:** give the present path (or `vtrun`) its own `SETCRTC`/
+   modeset so a bad panel boot mode cannot corrupt output; add the
+   `console-unbind` ship path and the generic `vtrun` launcher.
 
 ## Explicit Non-Goals
 
