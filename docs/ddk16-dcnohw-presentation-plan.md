@@ -28,8 +28,15 @@ KMS/display investigation is in [BTT HDMI7 and OMAP DRM notes](btt-hdmi7-omapdrm
 
 ## Current Status
 
-**Active stage:** Stage 6 COMPLETE — next is the owed Stage 0 lifecycle/soak
-re-test, then Stage 7 (real game). **Phase 6b VALIDATED (2026-09-10):** the
+**Active stage:** **Stage 6 CLOSED (2026-09-10)** — next is Stage 7 (real game).
+**Stage 0 soak re-test PASSED:** 7 load→run→unload cycles (5 paced + 2 mailbox,
+every `rmmod` OK), a 180 s sustained paced run (10,601 swaps, `over_500ms=0`,
+clean exit), memory flat across the whole soak (`CmaFree` 16108→15748), IRQ 37
+rising healthily, and **zero** Oops/BUG/HASH/HWRecovery/BIF/WARN. **GLES coverage
+extended:** `sgx-window-swap` `SGX_TEXTURE`/`SGX_BLEND` (texture upload+sampling,
+indexed `glDrawElements`, `GL_BLEND`) also run clean (~59 fps, no GL failure) via
+the paced path — closes the game-representative gap before Stage 7. **Phase 6b
+VALIDATED (2026-09-10):** the
 in-kernel flip is now **paced** — `dc_nohw`'s `ProcessFlip` defers completion to
 a FIFO worker that blocking-commits each swap via `omapdrm_present` then
 completes it (freeing the previously-displayed, now off-screen buffer), so the
