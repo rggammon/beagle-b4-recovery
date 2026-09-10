@@ -9,9 +9,23 @@ focused on the active stage. The architecture (DisplayClass↔DRM layering,
 display-ownership invariant, buffer-state protocol), Handoff Card, and
 engineering rules live in the main plan and apply throughout.
 
-Stage 6 moves the flip **in-kernel** (daemonless endgame); Stage 5's userspace
-flip loop is its working prototype. Stage 7 validates a real game unchanged;
-Stage 8 packages the appliance.
+Stage 6 moves the flip **in-kernel** (daemonless endgame); Stage 5a's userspace
+flip loop is its working prototype. **Phase 5b was skipped** — its buffer-state
+pacing is validated directly here as **Stage 6b** (driven by the real in-kernel
+vblank flip-done, not a throwaway `sgxmode` ioctl loop). Stage 6 is split into
+**6a** (in-kernel *mailbox* flip: prove the `omapdrm` export + in-kernel atomic
+commit, complete immediately — same ghosting as 5a) and **6b** (paced: hold
+completion until vblank flip-done — ghosting gone). Stage 7 validates a real game
+unchanged; Stage 8 packages the appliance.
+
+**Iteration model (`omapdrm` is `CONFIG_DRM_OMAP=m`).** The whole DRM stack is
+modular on the board (`omapdrm`, `drm`, `drm_kms_helper`, `drm_display_helper`,
+`ti_tfp410`, `display_connector`), so the `omapdrm` export patch is a **module
+rebuild**, not a kernel reflash: rebuild `omapdrm.ko` (matched vermagic, the same
+utsrelease-pin discipline as `dcnohw.ko`), build `dcnohw.ko` against `omapdrm`'s
+new `Module.symvers` so the `omapdrm_present` CRC matches, deploy both, and
+**reboot** to load them (runtime `rmmod omapdrm` is impractical — `fbcon`/DVI
+chain hold it — but a reboot is cheap).
 
 ## Stage 6: In-Kernel Flip Endgame (`omapdrm_present`)
 
@@ -28,36 +42,57 @@ int omapdrm_present(struct drm_framebuffer *fb,
 ```
 
 It performs a `drm_atomic_helper_commit` of the primary plane to `fb`, and the
-vblank flip-done fires `flip_done(cookie)`. `dc_nohw`'s `ProcessFlip` (its
-registered `DC_FLIP_COMMAND` handler) calls it:
+vblank flip-done fires `flip_done(cookie)`. Because `dc_nohw`'s buffers are CMA
+`dma_buf`s, `omapdrm` must also expose an **import** helper (the in-kernel
+equivalent of `sgxmode`'s `PRIME_FD_TO_HANDLE` + `ADDFB2`):
+
+```c
+/* omapdrm — new, GPL-only */
+struct drm_framebuffer *omapdrm_import_dmabuf(struct dma_buf *dbuf,
+                                              u32 width, u32 height,
+                                              u32 pitch, u32 fourcc);
+void omapdrm_release_fb(struct drm_framebuffer *fb);
+```
+
+`dc_nohw`'s `ProcessFlip` (its registered `DC_FLIP_COMMAND` handler) drives it:
 
 - **Swapchain create:** register each `dc_nohw` buffer as an `omapdrm`
-  framebuffer once → `fb[K]`.
+  framebuffer once → `fb[K]` (the buffers are module-scope, so this may even be
+  done once at init).
 - **Per swap:** `omapdrm_present(fb[K], flip_done_cb, cookie)`.
 - **flip-done callback:** `pfnPVRSRVCmdComplete(cookie)` — the buffer is now
   reusable.
 - **Swapchain destroy:** unregister the framebuffers.
 
+**`ProcessFlip` context.** Today `ProcessFlip` calls `Flip()` then
+`pfnPVRSRVCmdComplete(hCmdCookie, IMG_FALSE)` **inline**. `drm_atomic_helper_commit`
+takes modeset locks (may sleep), so the commit is issued from a **workqueue**
+(safe regardless of `ProcessFlip`'s context). `pfnPVRSRVCmdComplete` is
+ISR/MISR-safe (hardware DCs complete swaps from the vblank handler), so **6b**
+calls it from the `omapdrm` flip-done callback; **6a** calls it inline
+(fire-and-forget mailbox).
+
 A driver's own in-kernel commit needs **no** DRM master, so nothing in the frame
 path is a master. `dc_nohw` gains a module dependency on `omapdrm` (as it already
 depends on `pvrsrvkm`): `dc_nohw` → `{pvrsrvkm, omapdrm}`. This requires a small
-`omapdrm` patch (`EXPORT_SYMBOL_GPL(omapdrm_present)`), acceptable for this
-appliance fork. **Prototype the register/flip/pace mechanics in Stage 5
-userspace first** — the ioctl sequence there maps one-to-one onto the exported
-call.
+`omapdrm` patch (`EXPORT_SYMBOL_GPL(omapdrm_present)` + `omapdrm_import_dmabuf`),
+acceptable for this appliance fork. Stage 5a already proved the
+register/flip/pace mechanics in userspace (`sgxmode`) — the ioctl sequence there
+maps one-to-one onto the exported calls.
 
 **Parking `fbcon` without a userspace flip master.** `fbcon` is an in-kernel
 `drm_client`; there is no clean in-kernel arbitration against `dc_nohw`'s
-commits. Two options:
+commits. Two console options (independent of the 6a/6b phase split above):
 
-- **6a (bring-up):** a tiny userspace helper holds DRM master as a _parking
-  token_ (no flips) for the app's lifetime — `SET_MASTER` suspends `fbcon`; the
-  driver's in-kernel commit bypasses the master check and still drives pixels;
-  `DROP_MASTER` on exit restores the console. Keeps a console fallback on the
-  other VTs.
-- **6b (ship):** unbind `fbcon` on the panel (`/sys/class/vtconsole/vtcon*/bind`
-  → 0, or `fbcon=map`) so `dc_nohw` is the sole CRTC user — no master anywhere.
-  No panel console; admin over serial/SSH.
+- **Console-park (bring-up):** a tiny userspace helper holds DRM master as a
+  _parking token_ (no flips) for the app's lifetime — `SET_MASTER` suspends
+  `fbcon`; the driver's in-kernel commit bypasses the master check and still
+  drives pixels; `DROP_MASTER` on exit restores the console. Keeps a console
+  fallback on the other VTs. (`sgxmode` in a no-flip “park” mode serves as this
+  helper for 6a.)
+- **Console-unbind (ship):** unbind `fbcon` on the panel
+  (`/sys/class/vtconsole/vtcon*/bind` → 0, or `fbcon=map`) so `dc_nohw` is the
+  sole CRTC user — no master anywhere. No panel console; admin over serial/SSH.
 
 **`vtrun` — the generic launcher (replaces `openvt`).** What remains of
 `sgxmode` once its flip loop moves into `dc_nohw` is not SGX-specific: set up a
@@ -67,8 +102,8 @@ graphics VT and run a fullscreen app. There is no minimal stock tool for this
 wrapping it: it folds in the VT allocation (`VT_OPENQRY` → free VT → activate →
 `VT_DISALLOCATE`) so the `kbd` package is not required, and it sets
 `KD_GRAPHICS`/`K_OFF` **before** activating to avoid the console text-flash on
-switch. It optionally takes the 6a parking master. `vtrun` is literally `sgxmode`
-minus the flip loop and swap-notify, generalized:
+switch. It optionally takes the console-park master. `vtrun` is literally
+`sgxmode` minus the flip loop and swap-notify, generalized:
 
 ```
 vtrun <app>   # VT_OPENQRY, KD_GRAPHICS + K_OFF (pre-activate), [SET_MASTER],
@@ -76,16 +111,45 @@ vtrun <app>   # VT_OPENQRY, KD_GRAPHICS + K_OFF (pre-activate), [SET_MASTER],
               # DROP_MASTER, switch back, VT_DISALLOCATE
 ```
 
-### Pass Criteria
+### Phase 6a: In-kernel mailbox flip
 
-- An unmodified game displays via the in-kernel path with **no** presenter
-  daemon and no userspace master in the frame path.
-- `omapdrm_present` commits pace to vblank; flip-done drives
-  `pfnPVRSRVCmdComplete` exactly once per swap.
+Prove the new in-kernel path with **immediate** completion (mailbox, like 5a):
+`dc_nohw` imports its buffers as `omapdrm` framebuffers, `ProcessFlip` schedules
+a workqueue `omapdrm_present(fb[K])` and completes the swap inline. Uses the
+console-park helper so `fbcon` yields. Same cross-buffer ghosting as 5a is
+acceptable — the point is to retire the `omapdrm` export + in-kernel atomic
+commit risk with **no** presenter daemon in the flip path.
+
+Pass criteria:
+
+- An unmodified game displays via the in-kernel flip — no `sgxmode` flip loop,
+  no userspace master in the flip path (only the idle console-park token).
+- `omapdrm_import_dmabuf` + `omapdrm_present` register and commit the `dc_nohw`
+  buffers; DMA-fence / vblank tracing shows `omapdrm` scanning them out.
 - Swapchain create/destroy register/unregister framebuffers without leaks;
-  process failure and recovery keep buffer reuse correct.
-- `fbcon` parking (6a) or unbind (6b) is clean and reversible.
-- DMA-fence / vblank tracing shows `omapdrm` presenting the `dc_nohw` buffers.
+  child exit and console-park drop restore `fbcon` cleanly.
+- Stage 0 lifecycle/soak re-test passes (both `omapdrm.ko` and `dcnohw.ko`
+  changed).
+
+### Phase 6b: Paced in-kernel flip
+
+Add vblank pacing: `ProcessFlip` does **not** complete inline; the `omapdrm`
+flip-done callback (vblank) calls `pfnPVRSRVCmdComplete` — exactly once per swap,
+restoring the `FREE → RENDERING → READY → QUEUED → SCANNING → FREE` buffer-state
+protocol and vsync back-pressure. This is the pacing 5b would have done, now
+driven by the real in-kernel flip-done. Ghosting is gone.
+
+Pass criteria:
+
+- `omapdrm_present` commits pace to vblank; flip-done drives
+  `pfnPVRSRVCmdComplete` **exactly once** per swap; the buffer-state protocol
+  holds (no overwrite-while-scanning, no ghosting).
+- Process failure and recovery keep buffer reuse correct; a sustained
+  multi-minute run stays memory-flat with no recovery.
+- SGX completion, in-kernel commit, and KMS flip latency are recorded
+  separately.
+- Console-park (bring-up) and console-unbind (ship) are each clean and
+  reversible.
 
 ## Stage 7: Application Validation
 

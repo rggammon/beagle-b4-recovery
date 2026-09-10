@@ -28,12 +28,18 @@ KMS/display investigation is in [BTT HDMI7 and OMAP DRM notes](btt-hdmi7-omapdrm
 
 ## Current Status
 
-**Active stage:** Stage 5 (transparent `sgxmode` presenter + `dc_nohw`
-swap-notify). **Phase 5a VALIDATED (2026-09-09):** an **unmodified**
+**Active stage:** Stage 6a (in-kernel `omapdrm_present`, mailbox). **Phase 5a
+VALIDATED (2026-09-09):** an **unmodified**
 `sgx-window-swap` animated on the panel through the `dc_nohw` swap-notify →
 `sgxmode` `PAGE_FLIP` path (3110 swaps/30 s, rotating triangle, expected mailbox
-ghosting) — first transparent presentation of an unmodified app. Next: Phase 5b
-(paced flip-done) or Stage 6 (in-kernel `omapdrm_present`).
+ghosting) — first transparent presentation of an unmodified app. **Decision
+(2026-09-09): skip Phase 5b, go to Stage 6** — 5b's `FLIP_DONE` ioctl + `sgxmode`
+flip-done loop are pure throwaway (`sgxmode` retires in Stage 6), and 5b would
+not exercise Stage 6's real new risk (the `omapdrm` export + in-kernel atomic
+commit). The buffer-state pacing that 5b would have proven is instead done as
+**Stage 6b** driven by the real in-kernel vblank flip-done. `omapdrm` is already
+`CONFIG_DRM_OMAP=m` on the board, so Stage 6 keeps a cheap loop (rebuild
+`omapdrm.ko` + reboot, no kernel reflash).
 **Stage 4 complete (2026-09-09):** an SGX-rendered frame — a solid
 clear _and_ a shader/VBO/depth triangle — reached the BTT-HDMI7 through the
 zero-copy `dc_nohw → PRIME → omapdrm` path, both as a two-process `raw` present
@@ -750,13 +756,22 @@ and **Stage 6** eliminate — it does **not** block the 5a milestone.
 Pass criteria:
 
 - [x] The **unmodified** Stage 1 triangle (`sgx-window-swap`, default
-  `SGX_SWAP=1`) animates on the panel — no source changes. (Real game deferred
-  to Stage 7.)
+      `SGX_SWAP=1`) animates on the panel — no source changes. (Real game deferred
+      to Stage 7.)
 - [x] `PAGE_FLIP` is vblank-synced; presented buffer is stable (ghosting is the
-  cross-buffer mailbox artifact, not intra-buffer tearing → 5b/6 fix).
+      cross-buffer mailbox artifact, not intra-buffer tearing → 5b/6 fix).
 - [x] Swapchain create/destroy and child exit are clean; `fbcon` restores.
 
-### Phase 5b: Paced presentation (buffer-state protocol)
+### Phase 5b: Paced presentation (buffer-state protocol) — SKIPPED (folded into Stage 6b)
+
+**Skipped (2026-09-09).** 5b would have added a `DC_NOHW_EXPORT_FLIP_DONE{N}`
+ioctl and an `sgxmode` flip-done→report loop to pace the userspace presenter —
+but `sgxmode` itself retires in Stage 6, so that harness is pure throwaway, and
+it would not exercise Stage 6's genuinely new risk (the `omapdrm` export +
+in-kernel `drm_atomic_helper_commit`). The completion-hold logic 5b would prove
+lives in `dc_nohw` in **both** 5b and Stage 6; it is therefore validated directly
+as **Stage 6b**, driven by the real in-kernel vblank flip-done instead of an
+ioctl round-trip. The design below is retained for reference.
 
 Couple completion to scanout: `dc_nohw` holds the swap command until the
 presenter's `FLIP_DONE{N}` reports the buffer finished `SCANNING`, so the
