@@ -51,8 +51,8 @@ make ARCH=arm CROSS_COMPILE="$CROSS" -j"$JOBS" zImage ti/omap/omap3-beagle-ab4.d
 cp arch/arm/boot/zImage "$out/zImage-devuan"
 cp arch/arm/boot/dts/ti/omap/omap3-beagle-ab4.dtb "$out/omap3-beagle-ab4-devuan.dtb"
 
-# Module tree for the rootfs graft (pvrsrvkm_omap3_sgx530_121.ko + friends). Strip debug
-# info and drop the dangling build/source symlinks at the host build tree.
+# Module tree for the rootfs graft (the DDK 1.6 pvrsrvkm.ko + dcnohw.ko display class).
+# Strip debug info and drop the dangling build/source symlinks at the host build tree.
 rm -rf "$out/modroot-devuan"
 make ARCH=arm CROSS_COMPILE="$CROSS" INSTALL_MOD_PATH="$out/modroot-devuan" INSTALL_MOD_STRIP=1 modules_install
 rm -f "$out"/modroot-devuan/lib/modules/*/build "$out"/modroot-devuan/lib/modules/*/source
