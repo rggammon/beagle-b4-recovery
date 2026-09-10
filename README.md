@@ -141,7 +141,7 @@ SGX fixes needed by each image.
 
 ### Devuan GPU kernel (against OpenPVRSGX Linux 7.2) — `kernel/patches-devuan/`
 
-`kernel/build-devuan.sh` applies these eight patches to the fork's DDK 1.6 branch
+`kernel/build-devuan.sh` applies these seven patches to the fork's DDK 1.6 branch
 (`rggammon/linux_openpvrsgx`, `users/rgammon/pvrsgx-1.6.16.3977`) and builds
 `CONFIG_PVRSGX_1_6_16_3977` + `dc_nohw` (the Phase 0 stack from the presentation plan).
 The AB4 timer correction is still supplied by building
@@ -165,12 +165,6 @@ The AB4 timer correction is still supplied by building
   no-autosuspend TWL4030 PHY fix as recovery. The stock 7.2 image registered the MUSB
   host/root hub but never detected the connected powered hub; rebinding MUSB reproduced
   the same no-connect state, making PHY power/DPLL stability directly relevant.
-- **`0005-pvrsgx-corerev-b4-exception.patch`** — adds the exact hardware/software pair
-  `(0x10003, 0x10201)` to the DDK's existing core-revision exception table, allowing
-  the B4's SGX530 1.0.3 silicon to use the available ti343x 1.2.1 ukernel while leaving
-  all other revision mismatches fatal. It also fixes the table iterator to index by
-  pair; the original loop skipped every pair after the first, so merely appending the
-  B4 pair did not bypass the runtime compatibility check.
 - **`0006-mmc-clear-single-block-recovery-flag.patch`** — clears Linux 7.2's
   `MQRQ_XFER_SINGLE_BLOCK` flag when a blk-mq tag is reused for a new request, while
   preserving it across retries of the same failed request. Without this, tags that had

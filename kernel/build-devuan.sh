@@ -4,7 +4,7 @@
 # modules, including the pvrsrvkm SGX530 module (CONFIG_SGX_OMAP=m).
 #
 # Patches applied (kernel/patches-devuan/): all four recovery-kernel hardware fixes,
-# the DDK core-rev exception/iterator repair, and a Linux 7.2 MMC recovery-state fix.
+# a Linux 7.2 MMC recovery-state fix, and the DDK 1.6 SGX IRQ + APM-latency fixes.
 #
 # The DDK sources are committed on the fork's DDK 1.6 branch, so a plain clone tracks
 # them (no submodule / separate download needed).
@@ -31,7 +31,7 @@ if [ ! -d "$src/.git" ]; then
 fi
 cd "$src"
 
-# Recovery hardware fixes + DDK core-rev exception.
+# Recovery hardware fixes + DDK 1.6 SGX IRQ/APM fixes.
 # -l --fuzz=3: the hsmmc patch is ported from the 6.6 tree, so line offsets differ.
 for p in "$here"/patches-devuan/*.patch; do
     if patch -p1 -l -R --dry-run -f <"$p" >/dev/null 2>&1; then
