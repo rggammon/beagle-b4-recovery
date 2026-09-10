@@ -9,6 +9,12 @@
  * which also seeds the game-representative Stage 0 coverage. SGX_DEPTH=1
  * requests and exercises a depth buffer.
  *
+ * Stage 4b (SGX_PRESENT=1): after rendering, the SAME process imports the
+ * rendered dc_nohw back buffer (SGX_PRESENT_INDEX, default 1) into omapdrm via
+ * DRM PRIME and scans it out (SETCRTC) for SGX_PRESENT_SECONDS, then restores
+ * the console — one soft-float process renders AND presents. The DRM path is
+ * float-free raw ioctls (no libdrm).
+ *
  * Run (fresh reload + pvrsrvinit + dcnohw first; FLIPWSEGL in powervr.ini):
  *   /opt/pandora-armel/lib/ld-linux.so.3 \
  *     --library-path /opt/pandora-armel/lib:/root/s16/gl \
@@ -20,6 +26,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <errno.h>
+#include <sys/ioctl.h>
+#include <drm/drm.h>
+#include <drm/drm_mode.h>
+#include <drm/drm_fourcc.h>
 
 #define EGL_DEFAULT_DISPLAY ((void *)0)
 #define EGL_NO_CONTEXT ((void *)0)
@@ -219,6 +232,145 @@ static void resolve_triangle_symbols(void *gles)
     glDeleteBuffers = symbol(gles, "glDeleteBuffers");
     glDeleteProgram = symbol(gles, "glDeleteProgram");
     glDeleteShader = symbol(gles, "glDeleteShader");
+}
+
+/* dc_nohw exporter UAPI (mirror of dc_nohw_export.h). */
+struct dc_nohw_export_abi_p {
+    uint32_t abi_version, width, height, stride, fourcc, buffer_count, buffer_size, reserved;
+};
+struct dc_nohw_export_buffer_p { uint32_t index, flags; int32_t fd; uint32_t reserved; };
+#define DC_NOHW_EXPORT_QUERY_ABI_P _IOR('D', 1, struct dc_nohw_export_abi_p)
+#define DC_NOHW_EXPORT_BUFFER_P    _IOWR('D', 2, struct dc_nohw_export_buffer_p)
+
+/*
+ * Stage 4b: import dc_nohw back-buffer `index` and scan it out on the connected
+ * CRTC for `seconds`, then restore the saved (fbcon) CRTC. Raw DRM UAPI ioctls,
+ * no libdrm; float-free, so it builds soft-float and runs in this same process.
+ */
+static int present_dc_nohw_buffer(unsigned index, unsigned seconds)
+{
+    int card = -1, ctrl = -1, dmabuf_fd = -1, rc = 1;
+    uint32_t gem_handle = 0;
+    struct dc_nohw_export_abi_p eabi;
+    struct dc_nohw_export_buffer_p ereq;
+    struct drm_prime_handle prime;
+    struct drm_mode_card_res res;
+    uint32_t *conn_ids = NULL;
+    struct drm_mode_get_connector conn;
+    struct drm_mode_modeinfo *modes = NULL;
+    struct drm_mode_get_encoder enc;
+    struct drm_mode_fb_cmd2 fb;
+    struct drm_mode_crtc crtc, saved_crtc;
+    struct drm_mode_modeinfo mode;
+    uint32_t conn_id = 0, crtc_id = 0;
+    unsigned i;
+    int found = 0;
+
+    card = open("/dev/dri/card0", O_RDWR | O_CLOEXEC);
+    if (card < 0) { perror("open card0"); return 1; }
+    ctrl = open("/dev/dc_nohw_export", O_RDWR | O_CLOEXEC);
+    if (ctrl < 0) { perror("open dc_nohw_export"); goto out; }
+
+    memset(&eabi, 0, sizeof(eabi));
+    if (ioctl(ctrl, DC_NOHW_EXPORT_QUERY_ABI_P, &eabi)) { perror("QUERY_ABI"); goto out; }
+    memset(&ereq, 0, sizeof(ereq));
+    ereq.index = index;
+    if (ioctl(ctrl, DC_NOHW_EXPORT_BUFFER_P, &ereq)) { perror("EXPORT_BUFFER"); goto out; }
+    dmabuf_fd = ereq.fd;
+
+    if (ioctl(card, DRM_IOCTL_SET_MASTER, NULL))
+        fprintf(stderr, "warning: not DRM master; SETCRTC may fail\n");
+
+    memset(&res, 0, sizeof(res));
+    if (ioctl(card, DRM_IOCTL_MODE_GETRESOURCES, &res)) { perror("GETRESOURCES(count)"); goto out; }
+    if (res.count_connectors == 0) { fprintf(stderr, "no connectors\n"); goto out; }
+    conn_ids = calloc(res.count_connectors, sizeof(uint32_t));
+    res.connector_id_ptr = (uint64_t)(uintptr_t)conn_ids;
+    res.fb_id_ptr = 0; res.crtc_id_ptr = 0; res.encoder_id_ptr = 0;
+    res.count_fbs = 0; res.count_crtcs = 0; res.count_encoders = 0;
+    if (ioctl(card, DRM_IOCTL_MODE_GETRESOURCES, &res)) { perror("GETRESOURCES(fill)"); goto out; }
+
+    for (i = 0; i < res.count_connectors && !found; i++) {
+        memset(&conn, 0, sizeof(conn));
+        conn.connector_id = conn_ids[i];
+        if (ioctl(card, DRM_IOCTL_MODE_GETCONNECTOR, &conn)) continue;
+        if (conn.connection != 1 || conn.count_modes == 0) continue;
+        modes = calloc(conn.count_modes, sizeof(*modes));
+        conn.modes_ptr = (uint64_t)(uintptr_t)modes;
+        conn.props_ptr = 0; conn.prop_values_ptr = 0; conn.encoders_ptr = 0;
+        conn.count_props = 0; conn.count_encoders = 0;
+        if (ioctl(card, DRM_IOCTL_MODE_GETCONNECTOR, &conn)) { free(modes); modes = NULL; continue; }
+        conn_id = conn.connector_id;
+        mode = modes[0];
+        memset(&enc, 0, sizeof(enc));
+        enc.encoder_id = conn.encoder_id;
+        if (enc.encoder_id && ioctl(card, DRM_IOCTL_MODE_GETENCODER, &enc) == 0 && enc.crtc_id)
+            crtc_id = enc.crtc_id;
+        found = 1;
+    }
+    if (!found) { fprintf(stderr, "no connected connector\n"); goto out; }
+    if (!crtc_id) {
+        uint32_t *crtc_ids = calloc(res.count_crtcs, sizeof(uint32_t));
+        struct drm_mode_card_res r2;
+        memset(&r2, 0, sizeof(r2));
+        r2.crtc_id_ptr = (uint64_t)(uintptr_t)crtc_ids;
+        r2.count_crtcs = res.count_crtcs;
+        if (ioctl(card, DRM_IOCTL_MODE_GETRESOURCES, &r2) == 0 && res.count_crtcs)
+            crtc_id = crtc_ids[0];
+        free(crtc_ids);
+    }
+    if (!crtc_id) { fprintf(stderr, "no CRTC\n"); goto out; }
+
+    memset(&saved_crtc, 0, sizeof(saved_crtc));
+    saved_crtc.crtc_id = crtc_id;
+    ioctl(card, DRM_IOCTL_MODE_GETCRTC, &saved_crtc);
+
+    memset(&prime, 0, sizeof(prime));
+    prime.fd = dmabuf_fd;
+    if (ioctl(card, DRM_IOCTL_PRIME_FD_TO_HANDLE, &prime)) { perror("PRIME_FD_TO_HANDLE"); goto out; }
+    gem_handle = prime.handle;
+
+    memset(&fb, 0, sizeof(fb));
+    fb.width = eabi.width;
+    fb.height = eabi.height;
+    fb.pixel_format = DRM_FORMAT_ARGB8888;
+    fb.handles[0] = gem_handle;
+    fb.pitches[0] = eabi.stride;
+    if (ioctl(card, DRM_IOCTL_MODE_ADDFB2, &fb)) { perror("ADDFB2"); goto out; }
+
+    memset(&crtc, 0, sizeof(crtc));
+    crtc.crtc_id = crtc_id;
+    crtc.fb_id = fb.fb_id;
+    crtc.set_connectors_ptr = (uint64_t)(uintptr_t)&conn_id;
+    crtc.count_connectors = 1;
+    crtc.mode = mode;
+    crtc.mode_valid = 1;
+    if (ioctl(card, DRM_IOCTL_MODE_SETCRTC, &crtc)) { perror("SETCRTC"); goto out; }
+    printf("present: buf=%u fb_id=%u %ux%u on %s for %us (single process)\n",
+           index, fb.fb_id, eabi.width, eabi.height, mode.name, seconds);
+
+    sleep(seconds);
+
+    if (saved_crtc.mode_valid && saved_crtc.fb_id) {
+        saved_crtc.set_connectors_ptr = (uint64_t)(uintptr_t)&conn_id;
+        saved_crtc.count_connectors = 1;
+        ioctl(card, DRM_IOCTL_MODE_SETCRTC, &saved_crtc);
+    }
+    ioctl(card, DRM_IOCTL_MODE_RMFB, &fb.fb_id);
+    {
+        struct drm_gem_close gc;
+        memset(&gc, 0, sizeof(gc));
+        gc.handle = gem_handle;
+        ioctl(card, DRM_IOCTL_GEM_CLOSE, &gc);
+    }
+    rc = 0;
+out:
+    if (card >= 0) { ioctl(card, DRM_IOCTL_DROP_MASTER, NULL); close(card); }
+    if (dmabuf_fd >= 0) close(dmabuf_fd);
+    if (ctrl >= 0) close(ctrl);
+    free(conn_ids);
+    free(modes);
+    return rc;
 }
 
 int main(int argc, char **argv)
@@ -472,6 +624,16 @@ int main(int argc, char **argv)
            (unsigned long long)(total_swaps ? total_swap_ns / total_swaps / 1000ULL : 0),
            (unsigned long long)(max_swap_ns / 1000ULL), over_500ms);
     printf("renderer=%s swap=%d\n", renderer, do_swap);
+
+    /* Stage 4b: same process presents the rendered dc_nohw buffer via KMS. */
+    if (getenv("SGX_PRESENT") != NULL && atoi(getenv("SGX_PRESENT")) != 0) {
+        unsigned pidx = getenv("SGX_PRESENT_INDEX") != NULL ?
+            (unsigned)strtoul(getenv("SGX_PRESENT_INDEX"), NULL, 0) : 1;
+        unsigned psec = getenv("SGX_PRESENT_SECONDS") != NULL ?
+            (unsigned)strtoul(getenv("SGX_PRESENT_SECONDS"), NULL, 0) : 10;
+        if (present_dc_nohw_buffer(pidx, psec) != 0)
+            fprintf(stderr, "FAIL: present\n");
+    }
 
     if (!eglDestroyContext(display, context))
         fail("eglDestroyContext");
