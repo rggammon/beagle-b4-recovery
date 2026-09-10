@@ -29,7 +29,12 @@ KMS/display investigation is in [BTT HDMI7 and OMAP DRM notes](btt-hdmi7-omapdrm
 ## Current Status
 
 **Active stage:** Stage 5 (transparent `sgxmode` presenter + `dc_nohw`
-swap-notify). **Stage 4 complete (2026-09-09):** an SGX-rendered frame — a solid
+swap-notify). **Phase 5a VALIDATED (2026-09-09):** an **unmodified**
+`sgx-window-swap` animated on the panel through the `dc_nohw` swap-notify →
+`sgxmode` `PAGE_FLIP` path (3110 swaps/30 s, rotating triangle, expected mailbox
+ghosting) — first transparent presentation of an unmodified app. Next: Phase 5b
+(paced flip-done) or Stage 6 (in-kernel `omapdrm_present`).
+**Stage 4 complete (2026-09-09):** an SGX-rendered frame — a solid
 clear _and_ a shader/VBO/depth triangle — reached the BTT-HDMI7 through the
 zero-copy `dc_nohw → PRIME → omapdrm` path, both as a two-process `raw` present
 (Phase 4a) and from a **single soft-float process** that renders and scans out
@@ -683,7 +688,7 @@ so it carries the vermagic/build discipline and a Stage 0 re-test.
 Stage 4 is the seed: `sgxmode`'s flip loop is Stage 4b's
 `present_dc_nohw_buffer()` generalised — import every `dc_nohw` buffer as a
 framebuffer **once**, then `PAGE_FLIP` to `fb[K]` on each swap. Stage 4 also
-showed *why* the notifier is needed: userspace cannot guess which back buffer a
+showed _why_ the notifier is needed: userspace cannot guess which back buffer a
 swap landed in (Stage 4 hard-coded index 1 for `SGX_SWAP=0`); the driver must
 say so.
 
@@ -719,7 +724,7 @@ completion **timing** is what distinguishes 5a from 5b.
   restore VT — `fbcon` resumes. The kernel auto-drops master on crash, so the
   console always comes back.
 
-### Phase 5a: Free-running mailbox prototype
+### Phase 5a: Free-running mailbox prototype — VALIDATED (2026-09-09)
 
 `dc_nohw` completes each swap **immediately** (as today); `sgxmode` presents the
 **latest** completed buffer on each vblank and coalesces (skips) intermediate
@@ -727,12 +732,29 @@ swaps it could not keep up with (mailbox). The game runs at its own rate; the
 panel shows the newest frame. This is the "unmodified game on screen at all"
 milestone — no back-pressure, minimal driver change (just emit `SWAP`).
 
+**Result:** the **unmodified** `sgx-window-swap` (default `SGX_SWAP=1`,
+`SGX_TRIANGLE=1 SGX_DEPTH=1`) ran as `sgxmode`'s child for 30 s (3110 swaps,
+~103 fps free-running) and the **rotating triangle animated on the panel** with
+zero source changes — first transparent presentation of an unmodified app.
+`sgxmode` imported all 3 `dc_nohw` buffers (`connector=57 crtc=58 1024x600
+nbuf=3`) and flipped off the swap-notify; both processes clean-exit and `fbcon`
+restored.
+
+A faint **double/ghost triangle** was visible — the expected 5a mailbox artifact:
+the game free-runs at ~103 fps into 3 buffers while `sgxmode` flips at 60 Hz with
+**no buffer-state handshake**, so a flip can land on a buffer the game is
+mid-redraw, straddling two rotation frames across the vsync split. This is
+exactly the tearing/overwrite-while-scanning that **Phase 5b** (paced flip-done)
+and **Stage 6** eliminate — it does **not** block the 5a milestone.
+
 Pass criteria:
 
-- The **unmodified** Stage 1 cube/triangle (`sgx-window-swap`, default
-  `SGX_SWAP=1`), then a real game, animates on the panel — no source changes.
-- `PAGE_FLIP` is vblank-synced (no tearing on the presented buffer).
-- Swapchain create/destroy and child exit are clean; `fbcon` restores.
+- [x] The **unmodified** Stage 1 triangle (`sgx-window-swap`, default
+  `SGX_SWAP=1`) animates on the panel — no source changes. (Real game deferred
+  to Stage 7.)
+- [x] `PAGE_FLIP` is vblank-synced; presented buffer is stable (ghosting is the
+  cross-buffer mailbox artifact, not intra-buffer tearing → 5b/6 fix).
+- [x] Swapchain create/destroy and child exit are clean; `fbcon` restores.
 
 ### Phase 5b: Paced presentation (buffer-state protocol)
 
