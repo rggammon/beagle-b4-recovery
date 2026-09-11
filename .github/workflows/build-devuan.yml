@@ -36,7 +36,7 @@ jobs:
             gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf bc bison flex libssl-dev swig python3-dev \
             u-boot-tools mtools dosfstools xz-utils wget python3 kmod git \
             e2fsprogs mmdebstrap arch-test qemu-user-static binfmt-support gpg \
-            meson ninja-build pkg-config python3-mako debhelper dpkg-dev
+            meson ninja-build pkg-config python3-mako build-essential debhelper dpkg-dev
           sudo update-binfmts --enable qemu-arm || true
 
       - name: Build matched DDK 1.6 userspace packages
