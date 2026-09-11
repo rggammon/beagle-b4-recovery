@@ -354,12 +354,16 @@ The active OMAP3 SGX103 presentation design, which keeps the final display
 adapter separable and uses this board's established OMAP DRM path first, is in
 [`ddk16-dcnohw-presentation-plan.md`](ddk16-dcnohw-presentation-plan.md).
 
-Hard-float applications still cannot `dlopen` the softfp EGL/GLES libraries.
-Using this stack for ordinary hard-float applications would require either an
-out-of-process GL command bridge or a new hard-float user-mode driver. The
-former is effectively a remote GLES implementation; the latter requires
-reimplementing much more than command-buffer serialization, including memory
-management, shader compilation, Services bridges, synchronization, and the
+A hard-float process can `dlopen` and call into the softfp EGL/GLES libraries
+(experiments ran substantial EGL/GLES workloads this way), but scalar
+floating-point arguments use the wrong registers without per-call ABI
+wrappers, so the pixels are wrong. Making ordinary hard-float applications use
+this stack would therefore require either a complete forwarding-wrapper GLES/EGL
+shim, an out-of-process GL command bridge, or a new hard-float user-mode driver.
+The project instead builds GPU applications as armel/soft-float. The command
+bridge is effectively a remote GLES implementation; the user-mode driver
+requires reimplementing much more than command-buffer serialization, including
+memory management, shader compilation, Services bridges, synchronization, and the
 SGXMKIF/uKernel protocol. No completed SGX5 community implementation was found;
 OpenPVRSGX deliberately preserves and modernizes the GPL kernel half while
 continuing to rely on matched proprietary userspace and uKernel binaries.

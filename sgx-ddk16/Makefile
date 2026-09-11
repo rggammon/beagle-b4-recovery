@@ -14,7 +14,7 @@ AUDIT_DIR := $(BUILD_DIR)/audit
 
 .DEFAULT_GOAL := help
 
-.PHONY: help fetch unpack audit dev-tree shims package verify clean
+.PHONY: help fetch unpack audit dev-tree package verify clean
 
 help:
 	@printf '%s\n' \
@@ -24,7 +24,6 @@ help:
 		'  make unpack   Extract gfx_rel_es2.x after explicit EULA acceptance' \
 		'  make audit    Record ELF attributes, dependencies, imports, and exports' \
 		'  make dev-tree Stage public TI headers and pkg-config metadata' \
-		'  make shims    Reserved for future armhf ABI compatibility libraries' \
 		'  make package  Build the runtime, tools, and development packages' \
 		'  make verify   Inspect package contents and run static ELF checks' \
 		'' \
@@ -48,10 +47,6 @@ audit: unpack
 dev-tree: unpack
 	@SDK_ROOT="$(SDK_ROOT)" DESTDIR="$(BUILD_DIR)/dev-tree" \
 		sh ./scripts/stage-dev.sh
-
-shims: audit
-	@echo 'armhf shim generation is blocked on the verified DDK symbol/import inventory' >&2
-	@exit 2
 
 package: audit
 	@chmod 0755 debian/rules

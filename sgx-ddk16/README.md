@@ -6,9 +6,10 @@ or supplied at build time and are never stored in this repository.
 
 The pipeline implements installer acquisition, checksum verification,
 EULA-gated extraction, ELF and header inventory, and package staging. The
-initial packages expose the vendor's soft-float ABI to armel applications under
-an isolated `/opt/sgx-ddk16` prefix. Native armhf EGL/GLES shims remain a future
-compatibility layer.
+packages expose the vendor's soft-float ABI to armel applications under an
+isolated `/opt/sgx-ddk16` prefix; armel applications link and run against it
+using Debian's armel `libc6`. There is no hard-float shim: hard-float
+applications that need the GPU are built as armel/soft-float instead.
 
 ## Local audit
 
