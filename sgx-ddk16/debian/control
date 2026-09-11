@@ -2,23 +2,33 @@ Source: sgx-ddk16
 Section: non-free/libs
 Priority: optional
 Maintainer: Beagle B4 Recovery Project <noreply@example.invalid>
-Build-Depends: debhelper-compat (= 13), gcc-arm-linux-gnueabihf, patchelf
+Build-Depends: debhelper-compat (= 13)
 Standards-Version: 4.6.2
 Rules-Requires-Root: no
 
 Package: sgx-ddk16-um
-Architecture: armhf
+Architecture: armel
+Depends: libc6, libgcc-s1, libstdc++6, ${misc:Depends}
 Conflicts: sgx-ddk-um-ti343x
 Replaces: sgx-ddk-um-ti343x
-Description: PowerVR SGX530 DDK 1.6 userspace with armhf compatibility shims
- Private TI DDK 1.6.16.3977 userspace for OMAP3530 SGX530, exposed through
- hard-float EGL and GLES compatibility libraries.
+Description: PowerVR SGX530 DDK 1.6 private soft-float userspace
+ Private TI DDK 1.6.16.3977 userspace for OMAP3530 SGX530. The soft-float
+ libraries are isolated under /opt/sgx-ddk16 for use by armel applications.
 
 Package: sgx-ddk16-tools
-Architecture: armhf
+Architecture: armel
+Pre-Depends: ${misc:Pre-Depends}
 Depends: sgx-ddk16-um (= ${binary:Version}), ${misc:Depends}
 Conflicts: sgx-ddk-um-tools
 Replaces: sgx-ddk-um-tools
 Description: PowerVR SGX530 DDK 1.6 initialization tools
  Initialization and diagnostic tools for the matched DDK 1.6.16.3977
  PowerVR SGX530 userspace.
+
+Package: sgx-ddk16-dev
+Section: non-free/libdevel
+Architecture: armel
+Depends: sgx-ddk16-um (= ${binary:Version}), ${misc:Depends}
+Description: PowerVR SGX530 DDK 1.6 EGL and GLES development files
+ Khronos EGL, OpenGL ES, and TI public extension headers from Graphics SDK
+ 4.03.00.02, with linker and pkg-config metadata for armel applications.

@@ -14,7 +14,7 @@ AUDIT_DIR := $(BUILD_DIR)/audit
 
 .DEFAULT_GOAL := help
 
-.PHONY: help fetch unpack audit shims package verify clean
+.PHONY: help fetch unpack audit dev-tree shims package verify clean
 
 help:
 	@printf '%s\n' \
@@ -23,8 +23,9 @@ help:
 		'  make fetch    Download or copy the checksum-pinned TI installer' \
 		'  make unpack   Extract gfx_rel_es2.x after explicit EULA acceptance' \
 		'  make audit    Record ELF attributes, dependencies, imports, and exports' \
-		'  make shims    Build the armhf ABI compatibility libraries' \
-		'  make package  Build the sgx-ddk16-um and sgx-ddk16-tools packages' \
+		'  make dev-tree Stage public TI headers and pkg-config metadata' \
+		'  make shims    Reserved for future armhf ABI compatibility libraries' \
+		'  make package  Build the runtime, tools, and development packages' \
 		'  make verify   Inspect package contents and run static ELF checks' \
 		'' \
 		'Required inputs:' \
@@ -44,15 +45,19 @@ unpack: fetch
 audit: unpack
 	@SDK_ROOT="$(SDK_ROOT)" OUTPUT="$(AUDIT_DIR)" sh ./scripts/audit-elf.sh
 
+dev-tree: unpack
+	@SDK_ROOT="$(SDK_ROOT)" DESTDIR="$(BUILD_DIR)/dev-tree" \
+		sh ./scripts/stage-dev.sh
+
 shims: audit
 	@echo 'armhf shim generation is blocked on the verified DDK symbol/import inventory' >&2
 	@exit 2
 
-package: shims
+package: audit
 	@chmod 0755 debian/rules
 	@rm -rf "$(DIST_DIR)"
 	@mkdir -p "$(DIST_DIR)"
-	@dpkg-buildpackage --build=binary --unsigned-source --unsigned-changes --host-arch armhf
+	@dpkg-buildpackage --build=binary --unsigned-source --unsigned-changes --host-arch armel
 	@find .. -maxdepth 1 -type f -name 'sgx-ddk16*.deb' \
 		-exec mv {} "$(DIST_DIR)/" \;
 

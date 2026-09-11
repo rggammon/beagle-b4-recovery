@@ -53,12 +53,14 @@
 #define EGL_NONE 0x3038
 #define EGL_VENDOR 0x3053
 #define EGL_VERSION 0x3054
+#define EGL_EXTENSIONS 0x3055
 #define EGL_CONTEXT_CLIENT_VERSION 0x3098
 
 #define GL_DEPTH_BUFFER_BIT 0x00000100
 #define GL_COLOR_BUFFER_BIT 0x00004000
 #define GL_DEPTH_TEST 0x0b71
 #define GL_RENDERER 0x1f01
+#define GL_EXTENSIONS 0x1f03
 #define GL_VERSION 0x1f02
 #define GL_VERTEX_SHADER 0x8b31
 #define GL_FRAGMENT_SHADER 0x8b30
@@ -454,6 +456,8 @@ int main(int argc, char **argv)
                           atoi(getenv("SGX_DEPTH")) != 0;
     const int summary_only = getenv("SGX_SUMMARY_ONLY") != NULL &&
                              atoi(getenv("SGX_SUMMARY_ONLY")) != 0;
+    const int print_extensions = getenv("SGX_EXTENSIONS") != NULL &&
+                                 atoi(getenv("SGX_EXTENSIONS")) != 0;
     /* SGX_SWAP=0 = Phase 1A: prove swapchain allocation only (render + glFinish,
        no eglSwapBuffers). Default SGX_SWAP=1 = Phase 1B swap cycling. */
     const int do_swap = getenv("SGX_SWAP") == NULL ||
@@ -575,6 +579,10 @@ int main(int argc, char **argv)
             const unsigned char *r = glGetString(GL_RENDERER);
             if (r != NULL)
                 strncpy(renderer, (const char *)r, sizeof(renderer) - 1);
+            if (print_extensions) {
+                printf("EGL_EXTENSIONS=%s\n", eglQueryString(display, EGL_EXTENSIONS));
+                printf("GL_EXTENSIONS=%s\n", glGetString(GL_EXTENSIONS));
+            }
         }
         if (use_depth)
             glEnable(GL_DEPTH_TEST);

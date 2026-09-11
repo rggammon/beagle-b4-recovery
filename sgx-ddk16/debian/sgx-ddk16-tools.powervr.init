@@ -1,0 +1,29 @@
+#!/bin/sh
+### BEGIN INIT INFO
+# Provides:          powervr
+# Required-Start:    $local_fs
+# Required-Stop:
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: Initialize PowerVR SGX services
+### END INIT INFO
+
+set -e
+
+case "${1:-}" in
+    start)
+        modprobe pvrsrvkm
+        modprobe dcnohw
+        /usr/bin/pvrsrvinit
+        ;;
+    stop)
+        ;;
+    restart|force-reload)
+        "$0" stop
+        "$0" start
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart|force-reload}" >&2
+        exit 1
+        ;;
+esac

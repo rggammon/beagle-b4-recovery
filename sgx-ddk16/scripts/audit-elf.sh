@@ -12,6 +12,17 @@ runtime=$(cat "$runtime_path_file")
 rm -rf "$OUTPUT"
 mkdir -p "$OUTPUT"
 find "$runtime" -type f -printf '%P\n' | LC_ALL=C sort > "$OUTPUT/files.txt"
+find "$SDK_ROOT/install" -type f -name '*.h' -printf '%P\n' | \
+    LC_ALL=C sort > "$OUTPUT/headers.txt"
+
+grep -q '/EGL/egl\.h$' "$OUTPUT/headers.txt" || {
+    echo 'SDK does not contain EGL/egl.h' >&2
+    exit 1
+}
+grep -q '/GLES2/gl2\.h$' "$OUTPUT/headers.txt" || {
+    echo 'SDK does not contain GLES2/gl2.h' >&2
+    exit 1
+}
 
 : > "$OUTPUT/elf.txt"
 find "$runtime" -type f -print | LC_ALL=C sort | while IFS= read -r candidate; do

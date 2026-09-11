@@ -45,8 +45,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            make curl file binutils coreutils debhelper devscripts dpkg-dev \
-            gcc-arm-linux-gnueabihf patchelf
+            make curl file binutils coreutils debhelper devscripts dpkg-dev
 
       - name: Audit TI SDK userspace
         working-directory: sgx-ddk16

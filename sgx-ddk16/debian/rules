@@ -4,8 +4,28 @@
 	dh $@
 
 override_dh_auto_build:
-	$(MAKE) shims
+	:
+
+override_dh_auto_clean:
+	:
 
 override_dh_auto_install:
-	@echo 'package staging is blocked on the verified DDK file manifest' >&2
-	exit 2
+	SDK_ROOT="$(CURDIR)/build/sdk" \
+		RUNTIME_DESTDIR="$(CURDIR)/debian/sgx-ddk16-um" \
+		TOOLS_DESTDIR="$(CURDIR)/debian/sgx-ddk16-tools" \
+		sh ./scripts/stage-runtime.sh
+	SDK_ROOT="$(CURDIR)/build/sdk" \
+		DESTDIR="$(CURDIR)/debian/sgx-ddk16-dev" \
+		sh ./scripts/stage-dev.sh
+
+override_dh_strip:
+	:
+
+override_dh_dwz:
+	:
+
+override_dh_shlibdeps:
+	:
+
+override_dh_installinit:
+	dh_installinit --name=powervr

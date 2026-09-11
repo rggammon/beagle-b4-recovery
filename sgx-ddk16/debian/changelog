@@ -1,5 +1,8 @@
 sgx-ddk16 (1.6.16.3977) unstable; urgency=medium
 
-  * Initial packaging scaffold.
+  * Package the SGX103 soft-float runtime under /opt/sgx-ddk16.
+  * Add armel loader wrappers, diagnostics, and the PowerVR init service.
+  * Add namespaced public headers and armel pkg-config metadata.
+  * Validate initialization and serialized rendering on BeagleBoard B4.
 
  -- Beagle B4 Recovery Project <noreply@example.invalid>  Thu, 10 Sep 2026 00:00:00 +0000

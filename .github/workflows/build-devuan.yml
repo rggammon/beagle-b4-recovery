@@ -5,11 +5,26 @@ name: build-devuan
 
 on:
   workflow_dispatch:
-  push:
-    tags: ["devuan-v*"]
+    inputs:
+      sdk_url:
+        description: HTTPS URL for Graphics_SDK_setuplinux_4_03_00_02.bin
+        required: true
+        default: https://software-dl.ti.com/dsps/dsps_public_sw/sdo_sb/targetcontent/gfxsdk/4_03_00_02/exports/Graphics_SDK_setuplinux_4_03_00_02.bin
+        type: string
+      sdk_sha256:
+        description: Verified SHA-256 of the TI installer
+        required: true
+        default: "cdb0bd3964e107733d632aa8224e0537b05c1ffac34befc036423458c8d75255"
+        type: string
+      accept_ti_eula:
+        description: I accept the TI EULA and authorize embedding its binaries in the image artifact
+        required: true
+        default: false
+        type: boolean
 
 jobs:
   build-devuan:
+    if: inputs.accept_ti_eula
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
@@ -21,8 +36,16 @@ jobs:
             gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf bc bison flex libssl-dev swig python3-dev \
             u-boot-tools mtools dosfstools xz-utils wget python3 kmod git \
             e2fsprogs mmdebstrap arch-test qemu-user-static binfmt-support gpg \
-            meson ninja-build pkg-config python3-mako
+            meson ninja-build pkg-config python3-mako debhelper dpkg-dev
           sudo update-binfmts --enable qemu-arm || true
+
+      - name: Build matched DDK 1.6 userspace packages
+        working-directory: sgx-ddk16
+        env:
+          SDK_URL: ${{ inputs.sdk_url }}
+          SDK_SHA256: ${{ inputs.sdk_sha256 }}
+          ACCEPT_TI_EULA: "yes"
+        run: make package
 
       - name: Build U-Boot 2024.07 (MLO + u-boot.img, same binary as recovery)
         run: ./uboot/build.sh
@@ -31,6 +54,8 @@ jobs:
         run: ./kernel/build-devuan.sh
 
       - name: Build Devuan + SGX530 rootfs (ext4)
+        env:
+          SGX_DDK16_DEB_DIR: ${{ github.workspace }}/sgx-ddk16/dist
         run: sudo -E ./rootfs/build-devuan.sh
 
       - name: Assemble Devuan SD-card image
@@ -47,11 +72,4 @@ jobs:
             out/beagle-sdcard-devuan.img.xz
             out/SHA256SUMS-devuan
           if-no-files-found: error
-
-      - name: Publish release (on devuan-v* tag push)
-        if: startsWith(github.ref, 'refs/tags/devuan-v')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            out/beagle-sdcard-devuan.img.xz
-            out/SHA256SUMS-devuan
+# Release publication remains manual because the image embeds EULA-gated binaries.

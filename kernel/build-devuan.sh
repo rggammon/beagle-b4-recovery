@@ -11,11 +11,11 @@
 #
 # Env: CROSS_COMPILE (default arm-linux-gnueabihf-), JOBS (default nproc), WORK, OUT,
 #      OPENPVRSGX_REPO (default the rggammon fork), OPENPVRSGX_REF (branch or commit to
-#      build; default the DDK 1.6 Phase 0 branch users/rgammon/pvrsgx-1.6.16.3977).
+#      build; default the hardware-validated DDK 1.6 Stage 6b commit).
 set -eu
 
 REPO=${OPENPVRSGX_REPO:-https://github.com/rggammon/linux_openpvrsgx}
-REF=${OPENPVRSGX_REF:-users/rgammon/pvrsgx-1.6.16.3977}
+REF=${OPENPVRSGX_REF:-432466d86a4093fd80809df01000cadc97640c14}
 CROSS=${CROSS_COMPILE:-arm-linux-gnueabihf-}
 JOBS=${JOBS:-$(nproc)}
 here=$(cd "$(dirname "$0")" && pwd)
@@ -24,12 +24,31 @@ out=${OUT:-$here/../out}
 src="$work/openpvrsgx-src"
 mkdir -p "$work" "$out"
 
-# Shallow clone of the kernel + committed DDK (reused on re-runs).
+# Shallow clone of the kernel + committed DDK. Reuse a build tree only while it
+# is based on the requested commit; patches and build outputs make it intentionally
+# dirty after the first run.
 if [ ! -d "$src/.git" ]; then
     rm -rf "$src"
-    git clone --depth 1 --branch "$REF" "$REPO" "$src"
+    git init "$src"
+    git -C "$src" remote add origin "$REPO"
+    git -C "$src" fetch --depth 1 origin "$REF"
+    git -C "$src" checkout --detach FETCH_HEAD
+else
+    git -C "$src" remote set-url origin "$REPO"
+    git -C "$src" fetch --depth 1 origin "$REF"
+    requested_commit=$(git -C "$src" rev-parse FETCH_HEAD)
+    current_commit=$(git -C "$src" rev-parse HEAD)
+    if [ "$current_commit" != "$requested_commit" ]; then
+        echo ">> requested kernel changed; replacing stale build tree"
+        rm -rf "$src"
+        git init "$src"
+        git -C "$src" remote add origin "$REPO"
+        git -C "$src" fetch --depth 1 origin "$REF"
+        git -C "$src" checkout --detach FETCH_HEAD
+    fi
 fi
 cd "$src"
+echo ">> OpenPVRSGX commit $(git rev-parse HEAD)"
 
 # Recovery hardware fixes + DDK 1.6 SGX IRQ/APM fixes.
 # -l --fuzz=3: the hsmmc patch is ported from the 6.6 tree, so line offsets differ.

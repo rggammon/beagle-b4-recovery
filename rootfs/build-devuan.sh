@@ -1,20 +1,20 @@
 #!/bin/sh
 # Build the Devuan + PowerVR SGX530 root filesystem (glibc, sysvinit) as an ext4 image.
 #
-# Two-phase bootstrap so the maemo GPU packages don't drag in the whole Hildon desktop:
+# Two-phase bootstrap so the GPU packages don't drag in a desktop environment:
 #   Phase 1: a clean Devuan daedalus armhf base (mmdebstrap, no maemo repo).
-#   Phase 2: add the maemo-leste repo and explicitly install ONLY the SGX/GLES userspace.
+#   Phase 2: install the local matched DDK 1.6 armel packages, then use the
+#            maemo-leste repo only for the SGX-aware Mesa/GBM components.
 # Then graft the 7.2 SGX kernel modules (pvrsrvkm) + a small overlay, and make an ext4.
 #
-# The GPU userspace is Imagination's closed DDK (sgx-ddk-um-ti343x, core rev 1.2.1) from
-# maemo-leste; the kernel side (pvrsrvkm) is grafted from kernel/build-devuan.sh. NOTE:
-# the kernel is now DDK 1.6, so this ti343x userspace (DDK 1.17-era) is mismatched and
-# pending migration to a matched 1.6 GLES userspace packaged as a .deb (tracked separately).
+# The GPU userspace and kernel are both DDK 1.6.16.3977. The proprietary soft-float
+# userspace is isolated under /opt/sgx-ddk16 and runs with Devuan's armel libc.
 #
 # NO swap is baked in -- add it on the board later (e.g. a swapfile or a USB stick).
 #
 # Run as root (mounts + chroot). Env: OUT (default ../out), WORK (default ../build-devuan),
-# ARCH_DEB (armhf). Consumes OUT/modroot-devuan (from kernel/build-devuan.sh).
+# ARCH_DEB (armhf), SGX_DDK16_DEB_DIR. Consumes OUT/modroot-devuan (from
+# kernel/build-devuan.sh) and the sgx-ddk16-um/tools armel packages.
 set -eu
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -23,11 +23,26 @@ work=${WORK:-$here/../build-devuan}
 keys="$here/keys-devuan"
 R="$work/rootfs-devuan"
 mods="$out/modroot-devuan"
+ddk16_deb_dir=${SGX_DDK16_DEB_DIR:-}
 cross=${CROSS_COMPILE:-arm-linux-gnueabihf-}
 mkdir -p "$out" "$work"
 
 [ "$(id -u)" = 0 ] || { echo "run as root (sudo -E $0)" >&2; exit 1; }
 [ -d "$mods" ] || { echo "missing $mods (run kernel/build-devuan.sh first)" >&2; exit 1; }
+[ -d "$ddk16_deb_dir" ] || {
+    echo 'set SGX_DDK16_DEB_DIR to the directory containing the DDK 1.6 packages' >&2
+    exit 1
+}
+ddk16_um=$(find "$ddk16_deb_dir" -maxdepth 1 -type f -name 'sgx-ddk16-um_*_armel.deb' -print -quit)
+ddk16_tools=$(find "$ddk16_deb_dir" -maxdepth 1 -type f -name 'sgx-ddk16-tools_*_armel.deb' -print -quit)
+[ -n "$ddk16_um" ] || { echo "missing sgx-ddk16-um armel package in $ddk16_deb_dir" >&2; exit 1; }
+[ -n "$ddk16_tools" ] || { echo "missing sgx-ddk16-tools armel package in $ddk16_deb_dir" >&2; exit 1; }
+[ "$(dpkg-deb -f "$ddk16_um" Architecture)" = armel ] || { echo "DDK runtime package is not armel" >&2; exit 1; }
+[ "$(dpkg-deb -f "$ddk16_tools" Architecture)" = armel ] || { echo "DDK tools package is not armel" >&2; exit 1; }
+[ "$(dpkg-deb -f "$ddk16_um" Version)" = "$(dpkg-deb -f "$ddk16_tools" Version)" ] || {
+    echo "DDK runtime and tools package versions do not match" >&2
+    exit 1
+}
 
 DEVKR="$keys/devuan-archive-keyring.gpg"
 
@@ -66,7 +81,7 @@ mmdebstrap --arch="${ARCH_DEB:-armhf}" --variant=apt \
     "deb http://deb.devuan.org/merged daedalus main"
 echo "PHASE1 base: $(du -sh "$R" | cut -f1)"
 
-echo "=== PHASE 2: add maemo repo + install ONLY the SGX/GLES userspace ==="
+echo "=== PHASE 2: install matched DDK 1.6 + SGX-aware Mesa components ==="
 cp "$work/maemo-main.gpg"   "$R/etc/apt/trusted.gpg.d/maemo-main.gpg"
 cp "$work/maemo-extras.gpg" "$R/etc/apt/trusted.gpg.d/maemo-extras.gpg"
 cp "$DEVKR"                 "$R/etc/apt/trusted.gpg.d/devuan-archive-keyring.gpg"
@@ -75,20 +90,57 @@ echo 'Acquire::ForceIPv4 "true";' > "$R/etc/apt/apt.conf.d/99force-ipv4"
 cp /etc/resolv.conf "$R/etc/resolv.conf"
 mount --bind /proc "$R/proc"; mount --bind /sys "$R/sys"
 mount --bind /dev "$R/dev";   mount --bind /dev/pts "$R/dev/pts"
+chroot "$R" dpkg --add-architecture armel
 chroot "$R" apt-get -o APT::Sandbox::User=root -o Acquire::Check-Valid-Until=false update
 
-# The maemo package postinst unconditionally runs `rc-update add powervr sysinit`, but
-# this image deliberately uses Devuan's sysvinit rather than OpenRC. Let dpkg finish;
-# the OpenRC service is replaced with a native SysV script immediately below.
-cat > "$R/usr/sbin/rc-update" <<'SHIM'
+# Package service scripts cannot run until the custom kernel modules are grafted.
+cat > "$R/usr/sbin/policy-rc.d" <<'SHIM'
 #!/bin/sh
-exit 0
+exit 101
 SHIM
-chmod 755 "$R/usr/sbin/rc-update"
+chmod 755 "$R/usr/sbin/policy-rc.d"
+install -m 0644 "$ddk16_um" "$R/tmp/sgx-ddk16-um_armel.deb"
+install -m 0644 "$ddk16_tools" "$R/tmp/sgx-ddk16-tools_armel.deb"
 chroot "$R" apt-get -o APT::Sandbox::User=root -y --no-install-recommends install \
-    sgx-ddk-um-ti343x sgx-ddk-um-tools libgles2-mesa libegl1-mesa libegl-mesa0 \
+    /tmp/sgx-ddk16-um_armel.deb /tmp/sgx-ddk16-tools_armel.deb \
+    libgles2-mesa libegl1-mesa libegl-mesa0 \
     libgl1-mesa-dri libgbm1 mesa-utils kmscube drm-info
-rm -f "$R/usr/sbin/rc-update"
+rm -f "$R/usr/sbin/policy-rc.d" "$R/tmp/sgx-ddk16-um_armel.deb" \
+    "$R/tmp/sgx-ddk16-tools_armel.deb"
+
+echo "=== VERIFY: matched DDK 1.6 soft-float runtime ==="
+chroot "$R" dpkg --print-foreign-architectures | grep -qx armel
+for package in sgx-ddk16-um:armel sgx-ddk16-tools:armel \
+    libc6:armel libgcc-s1:armel libstdc++6:armel; do
+    [ "$(chroot "$R" dpkg-query -W -f='${Status}' "$package")" = "install ok installed" ] || {
+        echo "required package is not fully installed: $package" >&2
+        exit 1
+    }
+done
+chroot "$R" dpkg-query -W -f='${binary:Package} ${Architecture} ${Version} ${db:Status-Abbrev}\n' \
+    sgx-ddk16-um:armel sgx-ddk16-tools:armel \
+    libc6:armel libgcc-s1:armel libstdc++6:armel
+[ -f "$R/opt/sgx-ddk16/lib/libEGL.so" ]
+[ -f "$R/opt/sgx-ddk16/lib/libGLESv2.so" ]
+[ -f "$R/opt/sgx-ddk16/lib/libpvrPVR2D_FLIPWSEGL.so" ]
+[ -x "$R/usr/bin/sgx-ddk16-run" ]
+[ "$(readlink "$R/usr/bin/pvrsrvinit")" = sgx-ddk16-run ]
+[ -x "$R/etc/init.d/powervr" ]
+powervr_enabled=false
+for link in "$R"/etc/rc[2345].d/S*powervr; do
+    if [ -L "$link" ]; then
+        powervr_enabled=true
+        break
+    fi
+done
+[ "$powervr_enabled" = true ] || { echo "powervr SysV service is not enabled" >&2; exit 1; }
+grep -Fxq 'WindowSystem=libpvrPVR2D_FLIPWSEGL.so' "$R/etc/powervr.ini"
+grep -Fxq 'options dcnohw present=2' "$R/etc/modprobe.d/sgx-ddk16.conf"
+if chroot "$R" dpkg-query -W -f='${db:Status-Abbrev}\n' \
+    sgx-ddk-um-ti343x sgx-ddk-um-tools 2>/dev/null | grep -q '^ii'; then
+    echo "mismatched Maemo SGX userspace is still installed" >&2
+    exit 1
+fi
 
 # The packaged Mesa enables SGX but omits its omapdrm display-driver alias. Build
 # that alias from the exact Maemo-Leste source, then build a newer kmscube whose
@@ -161,37 +213,6 @@ chroot "$R" apt-get -o APT::Sandbox::User=root -y purge \
     libdrm-dev libgbm-dev libegl-dev libgles-dev libstdc++-12-dev \
     zlib1g-dev libexpat1-dev
 
-cat > "$R/etc/init.d/powervr" <<'SYSV'
-#!/bin/sh
-### BEGIN INIT INFO
-# Provides:          powervr
-# Required-Start:    $local_fs $remote_fs
-# Required-Stop:
-# Default-Start:     2 3 4 5
-# Default-Stop:      0 1 6
-# Short-Description: Initialize PowerVR SGX services
-### END INIT INFO
-
-case "${1:-}" in
-    start)
-        modprobe pvrsrvkm
-        modprobe dcnohw
-        /usr/bin/pvrsrvinit
-        ;;
-    stop)
-        ;;
-    restart|force-reload)
-        "$0" stop
-        "$0" start
-        ;;
-    *)
-        echo "Usage: $0 {start|stop|restart|force-reload}" >&2
-        exit 1
-        ;;
-esac
-SYSV
-chmod 755 "$R/etc/init.d/powervr"
-chroot "$R" update-rc.d powervr defaults
 chroot "$R" update-rc.d chrony defaults
 cat > "$R/etc/init.d/beagle-memory" <<'SYSV'
 #!/bin/sh
@@ -251,6 +272,21 @@ cp -a "$mods/lib/modules/$krel" "$R/lib/modules/$krel"
 rm -f "$R/lib/modules/$krel/build" "$R/lib/modules/$krel/source"
 depmod -b "$R" "$krel"
 
+pvrsrvkm_module=$(find "$R/lib/modules/$krel" -type f -name 'pvrsrvkm.ko' -print -quit)
+dcnohw_module=$(find "$R/lib/modules/$krel" -type f -name 'dcnohw.ko' -print -quit)
+omapdrm_module=$(find "$R/lib/modules/$krel" -type f -name 'omapdrm.ko' -print -quit)
+[ -n "$pvrsrvkm_module" ] || { echo "image is missing pvrsrvkm.ko" >&2; exit 1; }
+[ -n "$dcnohw_module" ] || { echo "image is missing dcnohw.ko" >&2; exit 1; }
+[ -n "$omapdrm_module" ] || { echo "image is missing omapdrm.ko" >&2; exit 1; }
+grep -a -q 'omapdrm_present' "$omapdrm_module" || {
+    echo "omapdrm.ko is missing the Stage 6 presentation helpers" >&2
+    exit 1
+}
+grep -a -q 'omapdrm_present' "$dcnohw_module" || {
+    echo "dcnohw.ko is not linked to the Stage 6 presentation helpers" >&2
+    exit 1
+}
+
 echo "=== GRAFT: system config ==="
 echo "root:beagle" | chroot "$R" chpasswd
 sed -i 's/^#*PermitRootLogin.*/PermitRootLogin yes/' "$R/etc/ssh/sshd_config" 2>/dev/null || true
@@ -286,12 +322,30 @@ echo "=== GRAFT: mesa pvr override + gpu-test helper ==="
 rm -f "$R/etc/profile.d/mesa-pvr.sh"
 cat > "$R/root/gpu-test.sh" <<'GPU'
 #!/bin/sh
-# Quick SGX530 sanity check: init services, then a surfaceless GLES render probe.
-echo "== dri devices =="; ls -l /dev/dri 2>&1
-echo "== sgx module =="; modprobe pvrsrvkm 2>/dev/null; modprobe dcnohw 2>/dev/null; lsmod | grep -iE 'pvr|dcnohw'
-echo "== pvrsrvinit =="; command -v pvrsrvinit >/dev/null && timeout 15 pvrsrvinit && echo "(ran)" || echo "(failed or timed out)"
-export MESA_LOADER_DRIVER_OVERRIDE=pvr EGL_PLATFORM=surfaceless
-echo "== eglinfo =="; command -v eglinfo >/dev/null && timeout 15 eglinfo 2>&1 | grep -iE 'vendor|render|version' | head || echo "(failed or timed out)"
+# Read-only first-boot check for the matched DDK 1.6 stack. The powervr boot
+# service owns pvrsrvinit; do not run it a second time against initialized services.
+set -eu
+
+echo "== packages =="
+dpkg-query -W -f='${binary:Package} ${Architecture} ${Version} ${db:Status-Abbrev}\n' \
+    sgx-ddk16-um:armel sgx-ddk16-tools:armel \
+    libc6:armel libgcc-s1:armel libstdc++6:armel
+
+echo "== modules =="
+lsmod | grep -E '^(pvrsrvkm|dcnohw)'
+printf 'dcnohw present='; cat /sys/module/dcnohw/parameters/present
+
+echo "== TI Services test =="
+log=/tmp/sgx-ddk16-services-test.log
+if timeout 30 sgx-ddk16-run services_test >"$log" 2>&1; then
+    grep -E 'DDK version|End loop' "$log"
+    echo "SGX DDK 1.6 services: PASS"
+else
+    status=$?
+    tail -40 "$log"
+    echo "SGX DDK 1.6 services: FAIL (status $status)" >&2
+    exit "$status"
+fi
 GPU
 chmod +x "$R/root/gpu-test.sh"
 
