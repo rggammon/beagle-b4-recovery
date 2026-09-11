@@ -27,5 +27,8 @@ override_dh_dwz:
 override_dh_shlibdeps:
 	:
 
+override_dh_makeshlibs:
+	:
+
 override_dh_installinit:
 	dh_installinit --name=powervr
