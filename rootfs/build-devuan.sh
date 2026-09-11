@@ -96,10 +96,27 @@ cat > "$R/usr/sbin/policy-rc.d" <<'SHIM'
 exit 101
 SHIM
 chmod 755 "$R/usr/sbin/policy-rc.d"
+
+# The Devuan 'merged' mirror is load-balanced; a backend occasionally 404s a pool
+# file its Packages index already lists. Acquire::Retries does not retry a 404, so
+# refresh the indices and retry the whole install (a new connection may hit a
+# backend that has the file).
+apt_install_retry() {
+    _n=1
+    while :; do
+        chroot "$R" apt-get -o APT::Sandbox::User=root -o Acquire::Retries=5 \
+            -y --no-install-recommends install "$@" && return 0
+        [ "$_n" -lt 4 ] || return 1
+        echo ">> apt install failed (attempt $_n); refreshing indices and retrying" >&2
+        chroot "$R" apt-get -o APT::Sandbox::User=root -o Acquire::Check-Valid-Until=false update || true
+        _n=$((_n + 1))
+    done
+}
+
 install -m 0644 "$ddk16_um" "$R/tmp/sgx-ddk16-um_armel.deb"
 install -m 0644 "$ddk16_tools" "$R/tmp/sgx-ddk16-tools_armel.deb"
 install -m 0644 "$ddk16_dev" "$R/tmp/sgx-ddk16-dev_armel.deb"
-chroot "$R" apt-get -o APT::Sandbox::User=root -y --no-install-recommends install \
+apt_install_retry \
     /tmp/sgx-ddk16-um_armel.deb /tmp/sgx-ddk16-tools_armel.deb \
     /tmp/sgx-ddk16-dev_armel.deb \
     drm-info
@@ -109,7 +126,7 @@ chroot "$R" apt-get -o APT::Sandbox::User=root -y --no-install-recommends instal
 # gcc-12:armel installs via the enabled armel multiarch; there is no armhf gcc to
 # clash with over /usr/bin/gcc, so the usual co-install conflict does not apply.
 # (gcc-arm-linux-gnueabi is not in daedalus main, so the cross metapackage is not.)
-chroot "$R" apt-get -o APT::Sandbox::User=root -y --no-install-recommends install \
+apt_install_retry \
     gcc-12:armel make libc6-dev:armel pkg-config
 chroot "$R" update-alternatives --install /usr/bin/arm-linux-gnueabi-gcc \
     arm-linux-gnueabi-gcc /usr/bin/arm-linux-gnueabi-gcc-12 50
