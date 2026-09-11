@@ -3,8 +3,7 @@
 #
 # Two-phase bootstrap so the GPU packages don't drag in a desktop environment:
 #   Phase 1: a clean Devuan daedalus armhf base (mmdebstrap, no maemo repo).
-#   Phase 2: install the local matched DDK 1.6 armel packages, then use the
-#            maemo-leste repo only for the SGX-aware Mesa/GBM components.
+#   Phase 2: install the local matched DDK 1.6 armel packages (softfp, /opt/sgx-ddk16).
 # Then graft the 7.2 SGX kernel modules (pvrsrvkm) + a small overlay, and make an ext4.
 #
 # The GPU userspace and kernel are both DDK 1.6.16.3977. The proprietary soft-float
@@ -24,7 +23,6 @@ keys="$here/keys-devuan"
 R="$work/rootfs-devuan"
 mods="$out/modroot-devuan"
 ddk16_deb_dir=${SGX_DDK16_DEB_DIR:-}
-cross=${CROSS_COMPILE:-arm-linux-gnueabihf-}
 mkdir -p "$out" "$work"
 
 [ "$(id -u)" = 0 ] || { echo "run as root (sudo -E $0)" >&2; exit 1; }
@@ -54,10 +52,6 @@ second_preimage_resistance = "always"
 POL
 export SEQUOIA_CRYPTO_POLICY="$work/allow-sha1.toml"
 
-# Dearmor the maemo repo keys for the chroot's gpgv.
-gpg --dearmor < "$keys/maemo-main-repo-key.asc" > "$work/maemo-main.gpg"
-gpg --dearmor < "$keys/maemo-extras-key.asc"    > "$work/maemo-extras.gpg"
-
 cleanup() {
     for mp in "$R/dev/pts" "$R/dev" "$R/sys" "$R/proc"; do
         if mountpoint -q "$mp"; then
@@ -81,12 +75,8 @@ mmdebstrap --arch="${ARCH_DEB:-armhf}" --variant=apt \
     "deb http://deb.devuan.org/merged daedalus main"
 echo "PHASE1 base: $(du -sh "$R" | cut -f1)"
 
-echo "=== PHASE 2: install matched DDK 1.6 + SGX-aware Mesa components ==="
-cp "$work/maemo-main.gpg"   "$R/etc/apt/trusted.gpg.d/maemo-main.gpg"
-cp "$work/maemo-extras.gpg" "$R/etc/apt/trusted.gpg.d/maemo-extras.gpg"
-cp "$DEVKR"                 "$R/etc/apt/trusted.gpg.d/devuan-archive-keyring.gpg"
-echo "deb https://maedevu.maemo.org/leste daedalus main" > "$R/etc/apt/sources.list.d/maemo.list"
-echo 'Acquire::ForceIPv4 "true";' > "$R/etc/apt/apt.conf.d/99force-ipv4"
+echo "=== PHASE 2: install the matched DDK 1.6 soft-float userspace ==="
+cp "$DEVKR" "$R/etc/apt/trusted.gpg.d/devuan-archive-keyring.gpg"
 cp /etc/resolv.conf "$R/etc/resolv.conf"
 mount --bind /proc "$R/proc"; mount --bind /sys "$R/sys"
 mount --bind /dev "$R/dev";   mount --bind /dev/pts "$R/dev/pts"
@@ -103,8 +93,7 @@ install -m 0644 "$ddk16_um" "$R/tmp/sgx-ddk16-um_armel.deb"
 install -m 0644 "$ddk16_tools" "$R/tmp/sgx-ddk16-tools_armel.deb"
 chroot "$R" apt-get -o APT::Sandbox::User=root -y --no-install-recommends install \
     /tmp/sgx-ddk16-um_armel.deb /tmp/sgx-ddk16-tools_armel.deb \
-    libgles2-mesa libegl1-mesa libegl-mesa0 \
-    libgl1-mesa-dri libgbm1 mesa-utils kmscube drm-info
+    drm-info
 rm -f "$R/usr/sbin/policy-rc.d" "$R/tmp/sgx-ddk16-um_armel.deb" \
     "$R/tmp/sgx-ddk16-tools_armel.deb"
 
@@ -141,77 +130,6 @@ if chroot "$R" dpkg-query -W -f='${db:Status-Abbrev}\n' \
     echo "mismatched Maemo SGX userspace is still installed" >&2
     exit 1
 fi
-
-# The packaged Mesa enables SGX but omits its omapdrm display-driver alias. Build
-# that alias from the exact Maemo-Leste source, then build a newer kmscube whose
-# framebuffer path handles DRM_FORMAT_MOD_INVALID correctly.
-chroot "$R" apt-get -o APT::Sandbox::User=root -y --no-install-recommends install \
-    libdrm-dev libgbm-dev libegl-dev libgles-dev libstdc++-12-dev \
-    zlib1g-dev libexpat1-dev
-cat > "$work/armhf.ini" <<EOF
-[binaries]
-c = ['${cross}gcc', '--sysroot=$R']
-cpp = ['${cross}g++', '--sysroot=$R']
-ar = '${cross}ar'
-strip = '${cross}strip'
-pkg-config = 'pkg-config'
-
-[properties]
-sys_root = '$R'
-pkg_config_libdir = ['$R/usr/lib/arm-linux-gnueabihf/pkgconfig', '$R/usr/share/pkgconfig']
-needs_exe_wrapper = true
-
-[host_machine]
-system = 'linux'
-cpu_family = 'arm'
-cpu = 'armv7'
-endian = 'little'
-EOF
-
-mesa_archive="$work/mesa_22.3.6+sgx2.orig.tar.gz"
-mesa_src="$work/mesa-src"
-mesa_build="$work/mesa-build"
-rm -rf "$mesa_src" "$mesa_build" "$mesa_archive"
-timeout 180 wget --tries=3 --timeout=30 -O "$mesa_archive" \
-    https://maedevu.maemo.org/leste/pool/main/m/mesa/mesa_22.3.6+sgx2.orig.tar.gz
-echo 'f023f52de624ac3ed7162e3ea19d94e1b707457ff6b59dac1d0db8c74781e21f  '"$mesa_archive" | sha256sum -c -
-mkdir -p "$mesa_src"
-tar -xzf "$mesa_archive" -C "$mesa_src" --strip-components=1
-cp "$here/../tools/mesa-bookworm-compat.c" \
-    "$mesa_src/src/gallium/targets/dri/mesa-bookworm-compat.c"
-sed -i "s/files('target.c'),/files('target.c', 'mesa-bookworm-compat.c'),/" \
-    "$mesa_src/src/gallium/targets/dri/meson.build"
-grep -q "files('target.c', 'mesa-bookworm-compat.c')" \
-    "$mesa_src/src/gallium/targets/dri/meson.build"
-meson setup "$mesa_build" "$mesa_src" --cross-file "$work/armhf.ini" \
-    -Dgallium-drivers=sgx -Dgallium-sgx-alias=omapdrm \
-    -Dvulkan-drivers= -Ddri-drivers= -Dplatforms=null -Dglx=disabled \
-    -Degl=enabled -Dgbm=enabled -Dllvm=disabled -Dshared-glapi=enabled \
-    -Dgles1=disabled -Dgles2=enabled -Dosmesa=false -Dvalgrind=disabled \
-    -Dbuild-tests=false
-ninja -C "$mesa_build" src/gallium/targets/dri/omapdrm_dri.so
-install -m 644 "$mesa_build/src/gallium/targets/dri/omapdrm_dri.so" \
-    "$R/usr/lib/arm-linux-gnueabihf/dri/omapdrm_dri.so"
-
-# Daedalus' kmscube passes DRM_FORMAT_MOD_INVALID to omapdrm as a real modifier.
-kmscube_src="$work/kmscube-src"
-kmscube_build="$work/kmscube-build"
-kmscube_ref=f60e50e887d3c49e91ac9b06d8199b36152632fa
-rm -rf "$kmscube_src" "$kmscube_build"
-attempt=1
-while ! timeout 180 git clone https://gitlab.freedesktop.org/mesa/kmscube.git "$kmscube_src"; do
-    rm -rf "$kmscube_src"
-    [ "$attempt" -lt 3 ] || { echo "failed to clone kmscube after $attempt attempts" >&2; exit 1; }
-    attempt=$((attempt + 1))
-done
-git -C "$kmscube_src" checkout --detach "$kmscube_ref"
-meson setup "$kmscube_build" "$kmscube_src" \
-    --cross-file "$work/armhf.ini" -Dgstreamer=disabled
-ninja -C "$kmscube_build" kmscube
-install -m 755 "$kmscube_build/kmscube" "$R/usr/local/bin/kmscube"
-chroot "$R" apt-get -o APT::Sandbox::User=root -y purge \
-    libdrm-dev libgbm-dev libegl-dev libgles-dev libstdc++-12-dev \
-    zlib1g-dev libexpat1-dev
 
 chroot "$R" update-rc.d chrony defaults
 cat > "$R/etc/init.d/beagle-memory" <<'SYSV'
@@ -318,8 +236,7 @@ asix
 r8152
 MODULES
 
-echo "=== GRAFT: mesa pvr override + gpu-test helper ==="
-rm -f "$R/etc/profile.d/mesa-pvr.sh"
+echo "=== GRAFT: gpu-test helper ==="
 cat > "$R/root/gpu-test.sh" <<'GPU'
 #!/bin/sh
 # Read-only first-boot check for the matched DDK 1.6 stack. The powervr boot
