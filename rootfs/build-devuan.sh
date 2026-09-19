@@ -23,6 +23,7 @@ keys="$here/keys-devuan"
 R="$work/rootfs-devuan"
 mods="$out/modroot-devuan"
 ddk16_deb_dir=${SGX_DDK16_DEB_DIR:-}
+ddk16_hf_dir=${SGX_DDK16_HF_DIR:-}
 mkdir -p "$out" "$work"
 
 [ "$(id -u)" = 0 ] || { echo "run as root (sudo -E $0)" >&2; exit 1; }
@@ -147,6 +148,33 @@ exec arm-linux-gnueabi-gcc "$@" \
 CC
 chmod 755 "$R/usr/local/bin/sgx-cc"
 
+# Hard-float (armhf) ABI shim: lets prebuilt hard-float GLES/EGL binaries drive
+# the soft-float DDK. Optional — installed only when SGX_DDK16_HF_DIR points at a
+# built shim tree (sgx-ddk16/build/hf-shim from `make hf-shim`).
+if [ -n "$ddk16_hf_dir" ]; then
+    echo "=== install hard-float ABI shim ==="
+    [ -f "$ddk16_hf_dir/lib/libEGL.so" ] && [ -d "$ddk16_hf_dir/ddk" ] || {
+        echo "SGX_DDK16_HF_DIR=$ddk16_hf_dir does not contain a built shim (lib/ + ddk/)" >&2
+        exit 1
+    }
+    install -d "$R/opt/sgx-ddk16-hf/lib" "$R/opt/sgx-ddk16-hf/ddk"
+    cp -a "$ddk16_hf_dir/lib/." "$R/opt/sgx-ddk16-hf/lib/"
+    cp -a "$ddk16_hf_dir/ddk/." "$R/opt/sgx-ddk16-hf/ddk/"
+    # The shim's loader finds the real (patched, libSGXm-first) DDK by absolute
+    # path; the app only needs the shim sonames on its library path.
+    cat > "$R/usr/bin/sgx-ddk16-hf-run" <<'HF'
+#!/bin/sh
+# Run a hard-float (armhf) GLES/EGL program on the soft-float SGX DDK 1.6 via the
+# ABI shim: hard-float libEGL/libGLESv2 veneers forward into an isolated dlmopen
+# namespace holding the real soft-float DDK + the libSGXm float interposer.
+[ "$#" -gt 0 ] || { echo 'usage: sgx-ddk16-hf-run PROGRAM [ARG ...]' >&2; exit 2; }
+export LD_LIBRARY_PATH=/opt/sgx-ddk16-hf/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
+export SGXHF_DDK_DIR=/opt/sgx-ddk16-hf/ddk
+exec "$@"
+HF
+    chmod 755 "$R/usr/bin/sgx-ddk16-hf-run"
+fi
+
 echo "=== VERIFY: matched DDK 1.6 soft-float runtime ==="
 chroot "$R" dpkg --print-foreign-architectures | grep -qx armel
 for package in sgx-ddk16-um:armel sgx-ddk16-tools:armel \
@@ -195,6 +223,17 @@ chroot "$R" sh -c 'cd /tmp && sgx-cc egl-smoke.c -o egl-smoke' || {
     echo "on-board toolchain smoke compile failed" >&2; exit 1; }
 [ -f "$R/tmp/egl-smoke" ] || { echo "toolchain smoke binary not produced" >&2; exit 1; }
 rm -f "$R/tmp/egl-smoke.c" "$R/tmp/egl-smoke"
+
+if [ -n "$ddk16_hf_dir" ]; then
+    echo "=== VERIFY: hard-float ABI shim ==="
+    [ -f "$R/opt/sgx-ddk16-hf/lib/libEGL.so" ] || { echo "hf shim libEGL.so missing" >&2; exit 1; }
+    [ -f "$R/opt/sgx-ddk16-hf/lib/libGLESv2.so" ] || { echo "hf shim libGLESv2.so missing" >&2; exit 1; }
+    [ -f "$R/opt/sgx-ddk16-hf/lib/libsgxhf.so.1" ] || { echo "hf shim libsgxhf missing" >&2; exit 1; }
+    [ -f "$R/opt/sgx-ddk16-hf/ddk/libEGL.so" ] || { echo "hf shim patched DDK missing" >&2; exit 1; }
+    [ -x "$R/usr/bin/sgx-ddk16-hf-run" ] || { echo "sgx-ddk16-hf-run wrapper missing" >&2; exit 1; }
+    readelf -A "$R/opt/sgx-ddk16-hf/lib/libGLESv2.so" | grep -qi 'VFP_args' || {
+        echo "hf shim libGLESv2.so is not hard-float" >&2; exit 1; }
+fi
 
 chroot "$R" update-rc.d chrony defaults
 cat > "$R/etc/init.d/beagle-memory" <<'SYSV'

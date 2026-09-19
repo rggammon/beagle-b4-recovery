@@ -33,7 +33,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf bc bison flex libssl-dev swig python3-dev \
+            gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf libc6-dev-armhf-cross \
+            patchelf python3-pyelftools bc bison flex libssl-dev swig python3-dev \
             u-boot-tools mtools dosfstools xz-utils wget python3 kmod git \
             e2fsprogs mmdebstrap arch-test qemu-user-static binfmt-support gpg \
             meson ninja-build pkg-config python3-mako build-essential debhelper dpkg-dev
@@ -47,6 +48,15 @@ jobs:
           ACCEPT_TI_EULA: "yes"
         run: make package
 
+      - name: Build hard-float ABI shim
+        working-directory: sgx-ddk16
+        env:
+          SDK_URL: ${{ inputs.sdk_url }}
+          SDK_SHA256: ${{ inputs.sdk_sha256 }}
+          ACCEPT_TI_EULA: "yes"
+          CROSS_HF: arm-linux-gnueabihf-gcc
+        run: make hf-shim
+
       - name: Build U-Boot 2024.07 (MLO + u-boot.img, same binary as recovery)
         run: ./uboot/build.sh
 
@@ -56,6 +66,7 @@ jobs:
       - name: Build Devuan + SGX530 rootfs (ext4)
         env:
           SGX_DDK16_DEB_DIR: ${{ github.workspace }}/sgx-ddk16/dist
+          SGX_DDK16_HF_DIR: ${{ github.workspace }}/sgx-ddk16/build/hf-shim
         run: sudo -E ./rootfs/build-devuan.sh
 
       - name: Assemble Devuan SD-card image
