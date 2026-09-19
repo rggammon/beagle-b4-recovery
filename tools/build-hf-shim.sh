@@ -104,6 +104,30 @@ for so in libEGL.so libGLESv2.so; do
         *) echo "  FAIL $so NEEDED order wrong: $order" >&2; rc=1 ;;
     esac
 done
+# patchelf can silently relocate .dynamic outside a PT_LOAD on these libs, which
+# makes the dynamic loader segfault at run time. Assert every patched DDK lib is
+# still loadable-shaped (PT_DYNAMIC within some PT_LOAD).
+if ! python3 - "$OUT/ddk"/*.so <<'PY'
+import sys
+from elftools.elf.elffile import ELFFile
+bad = []
+for path in sys.argv[1:]:
+    with open(path, 'rb') as f:
+        elf = ELFFile(f)
+        loads = [(s['p_offset'], s['p_offset'] + s['p_filesz'])
+                 for s in elf.iter_segments() if s['p_type'] == 'PT_LOAD']
+        for d in (s for s in elf.iter_segments() if s['p_type'] == 'PT_DYNAMIC'):
+            o = d['p_offset']
+            if not any(lo <= o < hi for lo, hi in loads):
+                bad.append(path)
+if bad:
+    sys.stderr.write('  FAIL PT_DYNAMIC outside PT_LOAD: %s\n' % ' '.join(bad))
+    sys.exit(1)
+print('  OK   %d patched DDK libs are loadable-shaped' % (len(sys.argv) - 1))
+PY
+then
+    rc=1
+fi
 [ "$rc" -eq 0 ] || { echo "ABI audit FAILED" >&2; exit 1; }
 
 echo "done: $OUT"

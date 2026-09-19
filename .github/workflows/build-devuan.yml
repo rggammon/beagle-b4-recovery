@@ -34,10 +34,14 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf libc6-dev-armhf-cross \
-            patchelf python3-pyelftools bc bison flex libssl-dev swig python3-dev \
+            python3-pyelftools bc bison flex libssl-dev swig python3-dev \
             u-boot-tools mtools dosfstools xz-utils wget python3 kmod git \
             e2fsprogs mmdebstrap arch-test qemu-user-static binfmt-support gpg \
             meson ninja-build pkg-config python3-mako build-essential debhelper dpkg-dev
+          # Ubuntu's apt patchelf (0.18) mislays .dynamic outside a PT_LOAD on the
+          # DWARF-heavy DDK libs; use the newer pip build (0.19+) instead.
+          python3 -m pip install --user --break-system-packages 'patchelf>=0.19'
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           sudo update-binfmts --enable qemu-arm || true
 
       - name: Build matched DDK 1.6 userspace packages
