@@ -51,7 +51,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             make curl file binutils coreutils debhelper devscripts dpkg-dev \
-            gcc-arm-linux-gnueabihf patchelf python3-pyelftools
+            gcc-arm-linux-gnueabihf libc6-dev-armhf-cross patchelf python3-pyelftools
 
       - name: Audit TI SDK userspace
         working-directory: sgx-ddk16
