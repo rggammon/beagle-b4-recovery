@@ -11,10 +11,14 @@ ACCEPT_TI_EULA ?= no
 INSTALLER := $(BUILD_DIR)/downloads/Graphics_SDK_setuplinux_4_03_00_02.bin
 SDK_ROOT := $(BUILD_DIR)/sdk
 AUDIT_DIR := $(BUILD_DIR)/audit
+HF_SHIM_DIR := $(BUILD_DIR)/hf-shim
+TOOLS_DIR := $(CURDIR)/../tools
+CROSS_HF ?= arm-linux-gnueabihf-gcc
+PATCHELF ?= patchelf
 
 .DEFAULT_GOAL := help
 
-.PHONY: help fetch unpack audit dev-tree package verify clean
+.PHONY: help fetch unpack audit dev-tree hf-shim package verify clean
 
 help:
 	@printf '%s\n' \
@@ -24,6 +28,7 @@ help:
 		'  make unpack   Extract gfx_rel_es2.x after explicit EULA acceptance' \
 		'  make audit    Record ELF attributes, dependencies, imports, and exports' \
 		'  make dev-tree Stage public TI headers and pkg-config metadata' \
+		'  make hf-shim  Build the hard-float ABI shim set (needs armhf cross gcc)' \
 		'  make package  Build the runtime, tools, and development packages' \
 		'  make verify   Inspect package contents and run static ELF checks' \
 		'' \
@@ -47,6 +52,18 @@ audit: unpack
 dev-tree: unpack
 	@SDK_ROOT="$(SDK_ROOT)" DESTDIR="$(BUILD_DIR)/dev-tree" \
 		sh ./scripts/stage-dev.sh
+
+# Build our hard-float ABI shim (libEGL/libGLESv2 veneers + libsgxhf loader +
+# libSGXm interposer) plus the libSGXm-first patched DDK. The shim .so's are our
+# own code; the patched DDK under $(HF_SHIM_DIR)/ddk remains TI-proprietary.
+hf-shim: unpack dev-tree
+	@runtime=$$(cat "$(SDK_ROOT)/runtime.path"); \
+		DDK_LIB="$$runtime" \
+		DDK_INC="$(BUILD_DIR)/dev-tree/usr/include/sgx-ddk16" \
+		OUT="$(HF_SHIM_DIR)" \
+		CROSS_HF="$(CROSS_HF)" PATCHELF="$(PATCHELF)" \
+		GEN="$(TOOLS_DIR)/gen-hf-shim.py" \
+		sh "$(TOOLS_DIR)/build-hf-shim.sh"
 
 package: audit
 	@chmod 0755 debian/rules

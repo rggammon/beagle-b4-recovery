@@ -1,0 +1,14 @@
+/* Version script for libSGXm.so.1. The DDK references its libm/libc imports at
+ * version GLIBC_2.4 (e.g. strtod@GLIBC_2.4). glibc's resolver prefers an exact
+ * version match, so unversioned wrappers lose to the real libc even when libSGXm
+ * is first in NEEDED. Exporting the wrappers AT GLIBC_2.4 makes them exact-version
+ * matches that win by scope order. */
+GLIBC_2.4 {
+  global:
+    sinf; cosf; tanf; asinf; acosf; atanf;
+    expf; logf; sqrtf; floorf; ceilf; fmodf; powf;
+    log; pow; atan2; frexpf; sincosf;
+    strtod; strtof; atof;
+  local:
+    *;
+};

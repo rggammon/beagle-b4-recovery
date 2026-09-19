@@ -33,6 +33,11 @@ on:
         required: true
         default: false
         type: boolean
+      build_hf_shim:
+        description: Build the hard-float ABI shim set (libEGL/libGLESv2 veneers)
+        required: true
+        default: true
+        type: boolean
 
 jobs:
   build:
@@ -45,7 +50,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            make curl file binutils coreutils debhelper devscripts dpkg-dev
+            make curl file binutils coreutils debhelper devscripts dpkg-dev \
+            gcc-arm-linux-gnueabihf patchelf python3-pyelftools
 
       - name: Audit TI SDK userspace
         working-directory: sgx-ddk16
@@ -64,6 +70,19 @@ jobs:
           ACCEPT_TI_EULA: "yes"
         run: make package
 
+      # The shim .so's (libEGL/libGLESv2 veneers, libsgxhf loader, libSGXm
+      # interposer) are our own code. The build's ABI audit fails CI if the
+      # shims are not hard-float or libSGXm lacks the versioned float symbols.
+      - name: Build hard-float ABI shim
+        if: inputs.build_hf_shim
+        working-directory: sgx-ddk16
+        env:
+          SDK_URL: ${{ inputs.sdk_url }}
+          SDK_SHA256: ${{ inputs.sdk_sha256 }}
+          ACCEPT_TI_EULA: "yes"
+          CROSS_HF: arm-linux-gnueabihf-gcc
+        run: make hf-shim
+
       - name: Upload ELF audit
         uses: actions/upload-artifact@v5
         with:
@@ -77,5 +96,26 @@ jobs:
         with:
           name: sgx-ddk16-debs
           path: sgx-ddk16/dist/*.deb
+          if-no-files-found: error
+          retention-days: 1
+
+      # Our shim code + generated veneers: no TI binaries, safe to upload.
+      - name: Upload hard-float shim libraries
+        if: inputs.build_hf_shim
+        uses: actions/upload-artifact@v5
+        with:
+          name: sgx-ddk16-hf-shim
+          path: |
+            sgx-ddk16/build/hf-shim/lib/
+            sgx-ddk16/build/hf-shim/gen/
+          if-no-files-found: error
+
+      # The patched DDK carries TI binaries; gate it on the same consent flag.
+      - name: Upload libSGXm-first patched DDK
+        if: inputs.build_hf_shim && inputs.upload_ti_binary_artifacts
+        uses: actions/upload-artifact@v5
+        with:
+          name: sgx-ddk16-hf-shim-ddk
+          path: sgx-ddk16/build/hf-shim/ddk/
           if-no-files-found: error
           retention-days: 1
