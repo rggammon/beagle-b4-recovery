@@ -41,7 +41,7 @@ index 4d9a8eab6..e3c9b80e3 100644
  };
  
  &mmc1 {
-+	compatible = "ti,omap3-pre-es3-hsmmc";
++	compatible = "ti,omap3-hsmmc";
 +	pinctrl-names = "default";
 +	pinctrl-0 = <&mmc1_pins>;
  	vmmc-supply = <&vmmc1>;

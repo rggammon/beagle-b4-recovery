@@ -11,11 +11,12 @@
 #
 # Env: CROSS_COMPILE (default arm-linux-gnueabihf-), JOBS (default nproc), WORK, OUT,
 #      OPENPVRSGX_REPO (default the rggammon fork), OPENPVRSGX_REF (branch or commit to
-#      build; default the hardware-validated DDK 1.6 Stage 6b commit).
+#      build; default the hardware-validated DDK 1.6 Stage 6b commit + the dc_nohw
+#      stale-swapchain reclaim fix).
 set -eu
 
 REPO=${OPENPVRSGX_REPO:-https://github.com/rggammon/linux_openpvrsgx}
-REF=${OPENPVRSGX_REF:-432466d86a4093fd80809df01000cadc97640c14}
+REF=${OPENPVRSGX_REF:-214a35fbc02e3ff5cdb6ef0eda245aec28b14e28}
 CROSS=${CROSS_COMPILE:-arm-linux-gnueabihf-}
 JOBS=${JOBS:-$(nproc)}
 here=$(cd "$(dirname "$0")" && pwd)
