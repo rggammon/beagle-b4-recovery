@@ -88,6 +88,70 @@ kmscube -D /dev/dri/card1
 dmesg | tail -100
 ```
 
+## Refresh rate and panel ripple
+
+A reported slow vertical "ripple" prompted a refresh-timing investigation. The
+forced mode runs slightly under 60 Hz, which looked like a candidate
+source-vs-panel refresh **beat**. On-hardware testing (below) ruled that out:
+the scanout is clean and the sub-Hz offset is not the cause.
+
+The forced `1024x600MR@60e` mode resolves to this exact CVT reduced-blanking
+timing (from `drm_info -j`; note the current Devuan image enumerates the OMAP
+connector as `card0-DVI-D-1`, not `card1`):
+
+```text
+pixel clock 43.833 MHz
+horizontal: 1024 1072 1104 1184   (hfp 48, hsync 32, hbp 80)  -> hsync 32 px OK
+vertical:   600  603  613  619    (vfp 3,  vsync 10, vbp 6)
+refresh = 43.833e6 / (1184 * 619) = 59.81 Hz
+```
+
+The requested `@60` rounds **down** to 59.81 Hz because the OMAP3 DSS PLL /
+DISPC LCD divider chain lands on 43.833 MHz (the nearest tap at or below the
+CVT-RB target of ~43.97 MHz). The result is **0.19 Hz under 60.00**.
+
+An early hypothesis was that the panel's TCON free-runs at ~60.00 Hz while the
+HDMI side writes at 59.81 Hz, beating once every ~5 s. **This was tested and
+ruled out** (see below): the panel scanout is clean and the 0.19 Hz has no
+visible effect.
+
+### Investigation: not a refresh beat (ruled out)
+
+`tools/kmsmode.c` (raw DRM UAPI ioctls, built on-board against `libdrm-dev`
+headers) drove the panel directly to A/B the theory. It takes DRM master, sets a
+custom modeline on a dumb framebuffer, animates or holds test patterns with
+vblank-synced page flips, and restores the fbcon CRTC on exit (no persistent
+change). Findings, all eyes-on at real-time priority (`chrt -f 50`):
+
+- **Static grating: rock solid.** Unmoving black/white lines held for 25 s show
+  no ripple, shimmer, or edge instability -> scanout, DVI signal, and panel
+  scaler are clean. This alone rules out a spatial/signal artifact.
+- **Solid-fill and solid-blue: clean.** Full-screen alternating grays (a
+  per-frame full-field flip, the most sensitive tear probe) showed **no seam**,
+  fixed or rolling; a static solid blue was a uniform field.
+- **Scrolling grating: smooth, tear-free.** 16-px bands scrolling at ~59 fps
+  marched as one field with no horizontal seam.
+- **The 0.19 Hz change did nothing.** An A/B of `stock` (vtotal 619 ->
+  59.81 Hz) vs `fix` (vtotal 617 -> 60.002 Hz by math) was visually identical.
+- **Exact 60.00 Hz is not reachable anyway.** The `fix` mode is accepted (no
+  `MODE_BAD`) but the DISPC still lands ~59-60 Hz; page-flip completion measured
+  ~59.2 fps in both, i.e. the DSS PLL granularity plus a few dropped flips swamp
+  the 0.3 % target. There is no modeline that pins the panel to exactly 60.00 Hz
+  on this hardware, and it would not matter if there were.
+
+Conclusion: the display timing/scanout is healthy and the CVT-RB
+`1024x600MR@60e` mode is fine as-is. The originally-reported ripple, if it
+recurs, is in the animated **content path** (`dc_nohw`/`omapdrm_present` pacing
+or the demo itself), not the panel mode. Do **not** pursue a DTB modeline change
+for it.
+
+`tools/kmsmode.c` remains as the on-board display probe:
+`kmsmode [stock|fix|forced|vbl] [seconds] [static|solid|blue]`. Build on-board
+with `cc -O2 -I/usr/include/libdrm` after `apt-get install libdrm-dev` (the
+`<drm/...>` includes resolve from the CI sysroot; on-board, rewrite them to
+`<drm*.h>` with `-I/usr/include/libdrm`). The `vbl` mode's number is unreliable
+(DRM auto-disables the vblank IRQ while idle); trust the page-flip rate instead.
+
 ## SGX rendering on HDMI
 
 Hardware-accelerated rendering is visible on the panel. The working path uses
