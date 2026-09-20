@@ -1,0 +1,80 @@
+Subject: [PATCH] pvrsgx 1.6: contain pending swapchain teardown
+
+PVRSRVProcessQueues can retain a display flip whose source-sync dependencies
+have not completed.  If process teardown reaches DestroyDCSwapChain in that
+state, PVRSRVDestroyCommandQueueKM waits one second and returns
+PVRSRV_ERROR_CANNOT_FLUSH_QUEUE without unlinking the queue.
+
+DestroyDCSwapChain ignored that result and continued to destroy the external
+swapchain and release its buffer sync infos.  The still-linked queue then held
+raw PVRSRV_KERNEL_SYNC_INFO pointers whose psSyncData allocations had been
+freed.  The pvr_timer worker subsequently faulted while checking source sync 0
+in PVRSRVProcessQueues.
+
+Fail closed when queue destruction fails, before changing shared-swapchain
+state or releasing anything referenced by its commands.  RESMAN has already
+removed the swapchain item before invoking this callback, so this containment
+leaks the failed swapchain.  It is intentionally a diagnostic safety measure,
+not final cancellation semantics.
+
+Also emit bounded diagnostics on the failure-only path.  The queue timeout
+records the pending command and source sync 0; the swapchain callback records
+each buffer sync.  Pointer identity in one reproduction will confirm whether
+the pending current-buffer sync is the object teardown previously freed.
+---
+ .../services4/srvkm/common/deviceclass.c           | 26 +++++++++++++++++++++++--
+ .../services4/srvkm/common/queue.c                 | 17 ++++++++++++++++-
+ 2 files changed, 40 insertions(+), 3 deletions(-)
+
+diff --git a/drivers/gpu/drm/pvrsgx/1.6.16.3977/services4/srvkm/common/deviceclass.c b/drivers/gpu/drm/pvrsgx/1.6.16.3977/services4/srvkm/common/deviceclass.c
+--- a/drivers/gpu/drm/pvrsgx/1.6.16.3977/services4/srvkm/common/deviceclass.c
++++ b/drivers/gpu/drm/pvrsgx/1.6.16.3977/services4/srvkm/common/deviceclass.c
+@@ -817 +817,24 @@ static PVRSRV_ERROR DestroyDCSwapChain(PVRSRV_DC_SWAPCHAIN *psSwapChain)
+-	if( psDCInfo->psDCSwapChainShared )
++	eError = PVRSRVDestroyCommandQueueKM(psSwapChain->psQueue);
++	if (eError != PVRSRV_OK)
++	{
++		printk(KERN_ERR "PVR_K: DestroyDCSwapChain: preserving swapchain 0x%x after queue 0x%x destroy failed (%d), RO=0x%x WO=0x%x\n",
++			(IMG_UINTPTR_T)psSwapChain,
++			(IMG_UINTPTR_T)psSwapChain->psQueue,
++			eError,
++			psSwapChain->psQueue->ui32ReadOffset,
++			psSwapChain->psQueue->ui32WriteOffset);
++
++		for (i = 0; i < psSwapChain->ui32BufferCount; i++)
++		{
++			PVRSRV_KERNEL_SYNC_INFO *psSyncInfo =
++				psSwapChain->asBuffer[i].sDeviceClassBuffer.psKernelSyncInfo;
++
++			printk(KERN_ERR "PVR_K: DestroyDCSwapChain: buffer %u syncinfo=0x%x syncdata=0x%x refcount=%u\n",
++				i, (IMG_UINTPTR_T)psSyncInfo,
++				psSyncInfo ? (IMG_UINTPTR_T)psSyncInfo->psSyncData : 0,
++				psSyncInfo ? psSyncInfo->ui32RefCount : 0);
++		}
++		return eError;
++	}
++
++	if( psDCInfo->psDCSwapChainShared )
+@@ -842 +865,0 @@ static PVRSRV_ERROR DestroyDCSwapChain(PVRSRV_DC_SWAPCHAIN *psSwapChain)
+-	PVRSRVDestroyCommandQueueKM(psSwapChain->psQueue);
+diff --git a/drivers/gpu/drm/pvrsgx/1.6.16.3977/services4/srvkm/common/queue.c b/drivers/gpu/drm/pvrsgx/1.6.16.3977/services4/srvkm/common/queue.c
+--- a/drivers/gpu/drm/pvrsgx/1.6.16.3977/services4/srvkm/common/queue.c
++++ b/drivers/gpu/drm/pvrsgx/1.6.16.3977/services4/srvkm/common/queue.c
+@@ -350 +350,16 @@ PVRSRV_ERROR IMG_CALLCONV PVRSRVDestroyCommandQueueKM(PVRSRV_QUEUE_INFO *psQueu
+-		PVR_DPF((PVR_DBG_ERROR,"PVRSRVDestroyCommandQueueKM : Failed to empty queue"));
++		PVRSRV_COMMAND *psCommand = (PVRSRV_COMMAND *)
++			((IMG_UINTPTR_T)psQueueInfo->pvLinQueueKM + psQueueInfo->ui32ReadOffset);
++		PVRSRV_KERNEL_SYNC_INFO *psSyncInfo = IMG_NULL;
++
++		if (psCommand->ui32SrcSyncCount != 0 && psCommand->psSrcSync != IMG_NULL)
++		{
++			psSyncInfo = psCommand->psSrcSync[0].psKernelSyncInfoKM;
++		}
++		printk(KERN_ERR "PVR_K: PVRSRVDestroyCommandQueueKM: queue 0x%x did not empty, RO=0x%x WO=0x%x cmd=0x%x srcs=%u src0_syncinfo=0x%x src0_syncdata=0x%x\n",
++			(IMG_UINTPTR_T)psQueueInfo,
++			psQueueInfo->ui32ReadOffset,
++			psQueueInfo->ui32WriteOffset,
++			(IMG_UINTPTR_T)psCommand,
++			psCommand->ui32SrcSyncCount,
++			(IMG_UINTPTR_T)psSyncInfo,
++			psSyncInfo ? (IMG_UINTPTR_T)psSyncInfo->psSyncData : 0);
