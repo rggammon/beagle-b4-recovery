@@ -31,7 +31,7 @@ Full text in [docs/omap-errata-sprz278f.txt](omap-errata-sprz278f.txt) (search
 > controller stops the clock and the card stops sending data; the clock is re-enabled
 > only when one portion is emptied. The output clock and data-enable are generated on
 > the same internal clock edge, and hold buffers on the data-enable signal make it
-> arrive *after* the first clock edge on restart — so the first datum after a
+> arrive _after_ the first clock edge on restart — so the first datum after a
 > clock-restart is not sampled. The failure is pattern- and bus-width-dependent
 > (e.g. write `0x2800`, read back `0x0801`). MMC3 is not affected (different IP
 > integration). **Workaround: none.**
@@ -42,14 +42,14 @@ restarts the read clock.
 
 ## Why DMA is immune
 
-The erratum's failure mechanism is a *flow-control* artifact of the PIO read path:
+The erratum's failure mechanism is a _flow-control_ artifact of the PIO read path:
 
 1. In PIO the **CPU** empties the controller's 2×512-byte read FIFO reactively (on the
    buffer-full interrupt, or by polling).
 2. There is latency between "FIFO full" and "CPU has drained a portion," so the
    controller frequently **stops the read clock** to back-pressure the card.
 3. On each clock restart, the data-enable-vs-clock-edge glitch drops the first sampled
-   datum → CRC error. Because it happens on *every* stall/restart, PIO multiblock reads
+   datum → CRC error. Because it happens on _every_ stall/restart, PIO multiblock reads
    are effectively unusable on affected silicon.
 
 Under **DMA**, that sequence does not occur:
@@ -61,19 +61,19 @@ Under **DMA**, that sequence does not occur:
 - The advisory is written entirely around the MPU read path ("No data are read by the
   MPU…"); it makes no claim about the DMA path.
 
-This is a *bet*, not a TI-blessed workaround — but it is (a) consistent with the
+This is a _bet_, not a TI-blessed workaround — but it is (a) consistent with the
 advisory's own PIO scoping and (b) empirically validated below. The `omap_hsmmc` driver
 uses DMA for data transfers whenever DMA channels are available (they are here — no PIO
 fallback in `dmesg`), so ordinary reads take the immune path.
 
 ## `pre-es3-hsmmc` quirk vs. our change
 
-| | `ti,omap3-pre-es3-hsmmc` (old) | `ti,omap3-hsmmc` (ours) |
-| --- | --- | --- |
-| Multiblock **reads** (`CMD18`) | disabled → single-block `CMD17` only | enabled, over DMA |
-| Multiblock **writes** (`CMD25`) | multiblock (unaffected by erratum) | multiblock |
-| Read throughput (this board) | ~0.5 MB/s | **~2.7–3.0 MB/s** |
-| Erratum exposure | avoided by not doing multiblock reads | avoided by using the DMA path |
+|                                 | `ti,omap3-pre-es3-hsmmc` (old)        | `ti,omap3-hsmmc` (ours)       |
+| ------------------------------- | ------------------------------------- | ----------------------------- |
+| Multiblock **reads** (`CMD18`)  | disabled → single-block `CMD17` only  | enabled, over DMA             |
+| Multiblock **writes** (`CMD25`) | multiblock (unaffected by erratum)    | multiblock                    |
+| Read throughput (this board)    | ~0.5 MB/s                             | **~2.7–3.0 MB/s**             |
+| Erratum exposure                | avoided by not doing multiblock reads | avoided by using the DMA path |
 
 The pre-es3 quirk trades throughput for guaranteed safety. Our change keeps the safety
 (via DMA) and recovers the throughput.

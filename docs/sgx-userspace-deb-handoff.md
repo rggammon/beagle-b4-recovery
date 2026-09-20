@@ -40,13 +40,13 @@ built custom kernel and module tree.
 
 The current and intended Beagle B4 stacks are therefore:
 
-| Layer                                         | Maemo Leste OMAP reference                                     | Beagle Devuan image today                                                                                                            | Intended SGX103 / DDK 1.6 stack                                                                     |
-| --------------------------------------------- | --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------- |
-| kernel image, DTB, `pvrsrvkm`, display module | `linux-image-omap`; includes loadable DDK 1.17 SGX modules      | not packaged; [kernel/build-devuan.sh](../kernel/build-devuan.sh) builds and grafts `zImage-devuan`, the DTB, and `modroot-devuan` | package the same matched kernel artifacts separately, or retain the graft until that package exists |
-| kernel source                                 | Maemo `omap-linux` source package                               | `rggammon/linux_openpvrsgx`, branch `users/rgammon/pvrsgx-1.6.16.3977`, plus this repository's config and patches                    | same sources as the current image                                                                    |
-| proprietary runtime and SGX uKernel           | `sgx-ddk-um-ti343x` `1.17.4948957+leste*` (armhf, SGX121)       | the same Maemo package is installed, but mismatches the DDK 1.6 kernel                                                               | `sgx-ddk16-um:armel` `1.6.16.3977` under `/opt/sgx-ddk16`                                           |
-| initialization and diagnostic tools           | `sgx-ddk-um-tools` `1.17.4948957+leste*`                         | the same Maemo package is installed                                                                                                  | `sgx-ddk16-tools:armel` `1.6.16.3977` with `sgx-ddk16-run`                                          |
-| development files                             | `sgx-ddk-um-dev` exists                                         | not installed                                                                                                                        | `sgx-ddk16-dev:armel` `1.6.16.3977`                                                                 |
+| Layer                                         | Maemo Leste OMAP reference                                 | Beagle Devuan image today                                                                                                          | Intended SGX103 / DDK 1.6 stack                                                                     |
+| --------------------------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| kernel image, DTB, `pvrsrvkm`, display module | `linux-image-omap`; includes loadable DDK 1.17 SGX modules | not packaged; [kernel/build-devuan.sh](../kernel/build-devuan.sh) builds and grafts `zImage-devuan`, the DTB, and `modroot-devuan` | package the same matched kernel artifacts separately, or retain the graft until that package exists |
+| kernel source                                 | Maemo `omap-linux` source package                          | `rggammon/linux_openpvrsgx`, branch `users/rgammon/pvrsgx-1.6.16.3977`, plus this repository's config and patches                  | same sources as the current image                                                                   |
+| proprietary runtime and SGX uKernel           | `sgx-ddk-um-ti343x` `1.17.4948957+leste*` (armhf, SGX121)  | the same Maemo package is installed, but mismatches the DDK 1.6 kernel                                                             | `sgx-ddk16-um:armel` `1.6.16.3977` under `/opt/sgx-ddk16`                                           |
+| initialization and diagnostic tools           | `sgx-ddk-um-tools` `1.17.4948957+leste*`                   | the same Maemo package is installed                                                                                                | `sgx-ddk16-tools:armel` `1.6.16.3977` with `sgx-ddk16-run`                                          |
+| development files                             | `sgx-ddk-um-dev` exists                                    | not installed                                                                                                                      | `sgx-ddk16-dev:armel` `1.6.16.3977`                                                                 |
 
 The intended userspace packages are generated by this repository from TI Graphics
 SDK `4.03.00.02` `gfx_rel_es2.x`. The intended kernel package would be generated
@@ -59,10 +59,10 @@ Maemo names OpenPVRSGX modules by SoC, SGX core, and hardware revision rather
 than by the historical DDK source version. Extending that convention to the B4
 would give this current mapping:
 
-| Module | Hardware target | Current implementation |
-| ------ | --------------- | ---------------------- |
-| `pvrsrvkm_omap3_sgx530_103.ko` | SGX530 revision 1.0.3 | DDK `1.6.16.3977` |
-| `pvrsrvkm_omap3_sgx530_121.ko` | SGX530 revision 1.2.1 | DDK `1.17.4948957` |
+| Module                         | Hardware target       | Current implementation |
+| ------------------------------ | --------------------- | ---------------------- |
+| `pvrsrvkm_omap3_sgx530_103.ko` | SGX530 revision 1.0.3 | DDK `1.6.16.3977`      |
+| `pvrsrvkm_omap3_sgx530_121.ko` | SGX530 revision 1.2.1 | DDK `1.17.4948957`     |
 
 The hardware-oriented name is sufficient for module and device-tree selection
 in the current OMAP3 matrix. The DDK version should remain in module metadata,
@@ -119,12 +119,12 @@ build. See [docs/ddk16-dcnohw-presentation-plan.md](ddk16-dcnohw-presentation-pl
 The extracted SDK was audited directly on September 10, 2026. Its embedded
 compiler flags establish both the SGX target and ABI:
 
-| Runtime | Build target | SGX core revision | ARM ABI |
-| ------- | ------------ | ----------------- | ------- |
-| `gfx_rel_es2.x` | `omap3430_linux` | `SGX_CORE_REV=103` | softfp |
-| `gfx_rel_es3.x` | `omap3430_linux` | `SGX_CORE_REV=121` | softfp |
-| `gfx_rel_es5.x` | `omap3630_linux` | `SGX_CORE_REV=125` | softfp |
-| `gfx_rel_es6.x` | `omap3630_linux` | `SGX_CORE_REV=125` | softfp |
+| Runtime         | Build target     | SGX core revision  | ARM ABI |
+| --------------- | ---------------- | ------------------ | ------- |
+| `gfx_rel_es2.x` | `omap3430_linux` | `SGX_CORE_REV=103` | softfp  |
+| `gfx_rel_es3.x` | `omap3430_linux` | `SGX_CORE_REV=121` | softfp  |
+| `gfx_rel_es5.x` | `omap3630_linux` | `SGX_CORE_REV=125` | softfp  |
+| `gfx_rel_es6.x` | `omap3630_linux` | `SGX_CORE_REV=125` | softfp  |
 
 Every ARM ELF in these four release payloads was checked with `readelf -A`:
 ES2 and ES3 each contain 36 ARM ELFs, ES5 and ES6 each contain 37, and none has
@@ -166,22 +166,22 @@ harness expects".
    version/build is rejected by `SGXDevInitCompatCheck` before corerev matters. The
    matched ukernel then passes the core-rev check with no exception patch.
 2. **Soft-float on an armhf image** — the es2.x 1.6 userspace is **softfp EABI5**; the
-  Devuan image is armhf/hardfp. The implemented packages use Debian multiarch:
-  `sgx-ddk16-um:armel` depends on `libc6:armel`, `libgcc-s1:armel`, and
-  `libstdc++6:armel`; vendor libraries live under `/opt/sgx-ddk16`. The
-  `sgx-ddk16-run` wrapper invokes the system `/lib/ld-linux.so.3` with that private
-  library path. No legacy libc is shipped.
+   Devuan image is armhf/hardfp. The implemented packages use Debian multiarch:
+   `sgx-ddk16-um:armel` depends on `libc6:armel`, `libgcc-s1:armel`, and
+   `libstdc++6:armel`; vendor libraries live under `/opt/sgx-ddk16`. The
+   `sgx-ddk16-run` wrapper invokes the system `/lib/ld-linux.so.3` with that private
+   library path. No legacy libc is shipped.
 3. **WSEGL** — ship `libpvrPVR2D_FLIPWSEGL.so` (`1.6.16.3977` softfp) and write
    `/etc/powervr.ini` `WindowSystem=libpvrPVR2D_FLIPWSEGL.so`. Use **FLIPWSEGL**, not
    FRONTWSEGL (FRONT sizes a front buffer from `dc_nohw`'s bogus geometry → immediate
    OOM). The 1.4 WSEGL and `gfx_rel_es{3,5,6,8}.x` WSEGL do **not** work
-  (DDK version or SGX core/build-target mismatch, not a hard-float mismatch for
-  the SDK 4.03 variants). See
+   (DDK version or SGX core/build-target mismatch, not a hard-float mismatch for
+   the SDK 4.03 variants). See
    [docs/sgx-ddk16-stall-followups.md](sgx-ddk16-stall-followups.md).
 4. **`pvrsrvinit`** — must run after every fresh module load. `/usr/bin/pvrsrvinit`
-  is a package-owned link to `sgx-ddk16-run`, and the package-owned SysV service
-  loads `pvrsrvkm` plus `dcnohw` before invoking it. The runtime package installs
-  `options dcnohw present=2` for the paced in-kernel presentation path.
+   is a package-owned link to `sgx-ddk16-run`, and the package-owned SysV service
+   loads `pvrsrvkm` plus `dcnohw` before invoking it. The runtime package installs
+   `options dcnohw present=2` for the paced in-kernel presentation path.
 5. **Mesa `omapdrm` alias + kmscube** — re-evaluate. The `omapdrm_dri.so` alias +
    newer kmscube serve the Mesa/GBM-KMS EGL path; the Stage 6 game path uses the
    in-kernel `dc_nohw` present (`present=2`) instead, so they may be unneeded for that

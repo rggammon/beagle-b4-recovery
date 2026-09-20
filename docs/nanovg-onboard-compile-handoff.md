@@ -72,6 +72,7 @@ Verify block (mirror the existing checks): assert `arm-linux-gnueabi-gcc` exists
 `main()` compiles and links against `/opt/sgx-ddk16/lib`.
 
 Notes / gotchas:
+
 - Weight: the cross toolchain + headers add a few hundred MB to the image — fine on
   the SD, but keep it to a build-tools set (don't pull a full desktop).
 - RAM: only **small** programs are in scope. Single-file `-O2` compiles fit within
@@ -91,8 +92,8 @@ binary (and, if wanted, the source) in the image. Or build on-board via `sgx-cc`
 once Item 1 lands.
 
 - **Source:** pin a `memononen/nanovg` commit. Compile `src/nanovg.c` + `example/demo.c`
-  + `example/perf.c` with `-DNANOVG_GLES2`, including `nanovg_gl.h` /
-  `nanovg_gl_utils.h`. Fonts (Roboto) and test images are under `example/`.
+  - `example/perf.c` with `-DNANOVG_GLES2`, including `nanovg_gl.h` /
+    `nanovg_gl_utils.h`. Fonts (Roboto) and test images are under `example/`.
 - **Drop GLFW.** The stock `example_gles2.c` uses GLFW (desktop X11/Wayland); this
   board has no X. Replace only the ~40-line window/context bootstrap with a **DDK
   EGL null-window shim** modeled on `tools/sgx-window-swap.c` (which already drives
@@ -102,7 +103,7 @@ once Item 1 lands.
   - **Request a stencil buffer** in the EGL config — NanoVG's crisp AA path needs
     it (`EGL_STENCIL_SIZE >= 8`); pass `NVG_STENCIL_STROKES`/`NVG_ANTIALIAS`.
   - Keep `demo.c` unchanged; loop `nvgBeginFrame → renderDemo → nvgEndFrame →
-    eglSwapBuffers` — the swap goes through `dc_nohw` → `omapdrm_present` (vblank).
+eglSwapBuffers` — the swap goes through `dc_nohw` → `omapdrm_present` (vblank).
 - **Launch:** run under the console-park/`vtrun` path (Stage 6) so `fbcon` yields.
 - **Metrics:** `perf.c` gives an on-screen FPS + GPU-timer graph — use it for the
   Stage 7 pacing/latency/dropped-frame numbers.
