@@ -133,6 +133,22 @@ chroot "$R" update-alternatives --install /usr/bin/arm-linux-gnueabi-gcc \
     arm-linux-gnueabi-gcc /usr/bin/arm-linux-gnueabi-gcc-12 50
 chroot "$R" update-alternatives --install /usr/bin/cc cc /usr/bin/arm-linux-gnueabi-gcc-12 50
 
+# Debug + persistent logging for the intermittent USB/NIC dropout hunt. gdb for
+# on-board debugging; busybox-syslogd is a light syslogd+klogd that records
+# kernel USB (musb/asix) events and udhcpc lease changes to /var/log/messages
+# with wall-clock timestamps, so a USB drop that kills the ASIX NIC's DHCP lease
+# is captured and survives reboots. (The board otherwise keeps kernel messages
+# only in the volatile dmesg ring.) Debian's busybox syslogd build has no file
+# rotation (-s/-b are rejected), so log to a plain persistent file; console spew
+# is bounded separately by the loglevel= boot arg (see flash/uEnv-sdcard-devuan.txt).
+apt_install_retry gdb busybox-syslogd
+cat > "$R/etc/default/busybox-syslogd" <<'DEF'
+SYSLOG_OPTS="-O /var/log/messages"
+KLOGD_OPTS=""
+DEF
+chroot "$R" update-rc.d busybox-syslogd defaults
+chroot "$R" update-rc.d busybox-klogd defaults
+
 rm -f "$R/usr/sbin/policy-rc.d" "$R/tmp/sgx-ddk16-um_armel.deb" \
     "$R/tmp/sgx-ddk16-tools_armel.deb" "$R/tmp/sgx-ddk16-dev_armel.deb"
 
@@ -223,6 +239,19 @@ chroot "$R" sh -c 'cd /tmp && sgx-cc egl-smoke.c -o egl-smoke' || {
     echo "on-board toolchain smoke compile failed" >&2; exit 1; }
 [ -f "$R/tmp/egl-smoke" ] || { echo "toolchain smoke binary not produced" >&2; exit 1; }
 rm -f "$R/tmp/egl-smoke.c" "$R/tmp/egl-smoke"
+
+echo "=== VERIFY: debug + persistent logging ==="
+[ -x "$R/usr/bin/gdb" ] || { echo "gdb missing" >&2; exit 1; }
+[ -x "$R/etc/init.d/busybox-syslogd" ] || { echo "busybox-syslogd init script missing" >&2; exit 1; }
+syslog_enabled=false
+for link in "$R"/etc/rc[2345].d/S*busybox-syslogd; do
+    if [ -L "$link" ]; then
+        syslog_enabled=true
+        break
+    fi
+done
+[ "$syslog_enabled" = true ] || { echo "busybox-syslogd service is not enabled" >&2; exit 1; }
+grep -Fq '/var/log/messages' "$R/etc/default/busybox-syslogd" || { echo "syslog log target not configured" >&2; exit 1; }
 
 if [ -n "$ddk16_hf_dir" ]; then
     echo "=== VERIFY: hard-float ABI shim ==="

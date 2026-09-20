@@ -6,4 +6,7 @@
 # 64-pixel limit; the non-reduced CVT mode used 104 pixels and was rejected as MODE_BAD.
 # force-enables the connector: the BTT HDMI7 (7" 1024x600) hands back no usable EDID over
 # this board's DVI DDC, so omapdrm otherwise reports it disconnected. 'e' = force enabled.
-bootargs=console=ttyS2,115200n8 root=/dev/mmcblk0p2 rootfstype=ext4 rw rootwait net.ifnames=0 cma=48M video=DVI-D-1:1024x600MR@60e
+# loglevel=4 keeps only ERR+ on the serial console (the SGX pvrsrvkm PVR_K register
+# dumps are KERN_INFO and otherwise flood ttyS2); klogd still records everything to
+# /var/log/messages, and kernel Oops/panic output ignores this and always prints.
+bootargs=console=ttyS2,115200n8 root=/dev/mmcblk0p2 rootfstype=ext4 rw rootwait net.ifnames=0 cma=48M loglevel=4 video=DVI-D-1:1024x600MR@60e
