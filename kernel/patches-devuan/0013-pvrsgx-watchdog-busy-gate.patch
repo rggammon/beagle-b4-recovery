@@ -1,0 +1,39 @@
+Subject: [PATCH] pvrsgx 1.6: gate SGX lockup watchdog on outstanding work
+
+SGXOSTimer declares a hardware lockup whenever the EDM task counter is unchanged
+for three samples while the SGX is powered; its only exemption is powered-down.
+A powered-but-idle SGX (parked EDM counter, empty kernel CCB, no BIF traffic)
+therefore false-trips HWRecoveryResetSGX. Patch 0009 raised the active-power
+latency to 500 ms, keeping the SGX powered through inter-frame and teardown idle
+gaps and making these false recoveries common (HWRecovery storms with
+BIF_FAULT=0, kernel CCB WO==RO, BIF_MEM_REQ_STAT=0).
+
+Gate the lockup counter on actual outstanding work: only treat a parked EDM
+counter as a lockup when the kernel CCB is not drained or a BIF memory request
+is in flight. A genuine hang keeps work outstanding, so real lockups are still
+detected; an idle SGX no longer resets. Decouples lockup detection from the APM
+latency and keeps 0009's power-lock fix intact.
+
+Not upstream behaviour: SGXOSTimer is unchanged through DDK 1.14 (only a
+per-workload OpenCL grace counter was ever added, and SGX530 has no OpenCL).
+---
+ .../pvrsgx/1.6.16.3977/services4/srvkm/devices/sgx/sgxinit.c   | 10 +++++++++-
+ 1 file changed, 9 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/gpu/drm/pvrsgx/1.6.16.3977/services4/srvkm/devices/sgx/sgxinit.c b/drivers/gpu/drm/pvrsgx/1.6.16.3977/services4/srvkm/devices/sgx/sgxinit.c
+index 3d2fd1dd6..356935bca 100755
+--- a/drivers/gpu/drm/pvrsgx/1.6.16.3977/services4/srvkm/devices/sgx/sgxinit.c
++++ b/drivers/gpu/drm/pvrsgx/1.6.16.3977/services4/srvkm/devices/sgx/sgxinit.c
+@@ -1169,0 +1170 @@ IMG_VOID SGXOSTimer(IMG_VOID *pvData)
++	IMG_BOOL		bIdle = IMG_FALSE;
+@@ -1179,0 +1181,7 @@ IMG_VOID SGXOSTimer(IMG_VOID *pvData)
++	/* Busy-gate: a parked EDM counter on an idle SGX (kernel CCB drained and no
++	   outstanding BIF memory requests) is not a lockup; a real hang keeps work in
++	   flight, so genuine lockups are still detected. */
++	bIdle = (!bPoweredDown)
++		&& (psDevInfo->psKernelCCBCtl->ui32ReadOffset == psDevInfo->psKernelCCBCtl->ui32WriteOffset)
++		&& (OSReadHWReg(psDevInfo->pvRegsBaseKM, EUR_CR_BIF_MEM_REQ_STAT) == 0);
++
+@@ -1182 +1190 @@ IMG_VOID SGXOSTimer(IMG_VOID *pvData)
+-	if (bPoweredDown)
++	if (bPoweredDown || bIdle)
