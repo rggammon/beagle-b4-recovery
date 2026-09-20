@@ -1,0 +1,64 @@
+Subject: [PATCH] pvrsgx 1.6: log SGXCleanupRequest status and timing
+
+SGXCleanupRequest asks the microkernel to retire a resource (render target,
+render context, transfer context, 2D context, pixel buffer) and then polls
+psSGXHostCtl->ui32CleanupStatus for PVRSRV_USSE_EDM_CLEANUPCMD_COMPLETE. In 1.6
+that COMPLETE bit is the only cleanup signal the firmware raises -- the
+BUSY/DONE EDM->host handshake was not added until later DDKs -- so a durable
+teardown fix that force-completes an orphaned flip's source sync after cleanup
+is only safe if COMPLETE reliably means the uKernel has fully quiesced the
+context (synchronous cleanup). Nothing records whether that poll succeeds or how
+long it takes, so the assumption is untested.
+
+Log per call: the cleanup type, whether the poll reached COMPLETE or timed out,
+the raw ui32CleanupStatus, and the elapsed microseconds; also log the NO_WORK
+fast path where the uKernel reports the context already idle so no cleanup
+command is issued. Correlating COMPLETE against any subsequent BIF fault or
+MMU_Finalise-while-in-use tests whether COMPLETE approximates DONE before
+building the reconcile-on-teardown fix.
+
+Reads only host-control state the driver already owns; no microkernel build
+option dependency. Diagnostic only.
+---
+ .../1.6.16.3977/services4/srvkm/devices/sgx/sgxutils.c    | 15 +++++++++++++--
+ 1 file changed, 13 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/gpu/drm/pvrsgx/1.6.16.3977/services4/srvkm/devices/sgx/sgxutils.c b/drivers/gpu/drm/pvrsgx/1.6.16.3977/services4/srvkm/devices/sgx/sgxutils.c
+index 37da58c90..04e74c52c 100755
+--- a/drivers/gpu/drm/pvrsgx/1.6.16.3977/services4/srvkm/devices/sgx/sgxutils.c
++++ b/drivers/gpu/drm/pvrsgx/1.6.16.3977/services4/srvkm/devices/sgx/sgxutils.c
+@@ -538,9 +538,14 @@ IMG_VOID SGXCleanupRequest(PVRSRV_DEVICE_NODE	*psDeviceNode,
+ 	PVRSRV_SGXDEV_INFO		*psSGXDevInfo = psDeviceNode->pvDevice;
+ 	PVRSRV_KERNEL_MEM_INFO	*psSGXHostCtlMemInfo = psSGXDevInfo->psKernelSGXHostCtlMemInfo;
+ 	SGXMKIF_HOST_CTL		*psSGXHostCtl = psSGXHostCtlMemInfo->pvLinAddrKM;
++	IMG_UINT32			ui32ProbeStart = 0;
++	IMG_UINT32			ui32ProbeStatus = 0;
++	IMG_BOOL			bProbePollOK = IMG_TRUE;
+ 
+ 	if ((psSGXHostCtl->ui32PowerStatus & PVRSRV_USSE_EDM_POWMAN_NO_WORK) != 0)
+ 	{
++		PVR_LOG(("SGXCleanupRequest: type=%u skipped, ukernel NO_WORK (powerstatus=0x%x)",
++				 ui32CleanupType, psSGXHostCtl->ui32PowerStatus));
+ 		
+ 	}
+ 	else
+@@ -560,11 +565,17 @@ IMG_VOID SGXCleanupRequest(PVRSRV_DEVICE_NODE	*psDeviceNode,
+ 
+ 		
+ 		#if !defined(NO_HARDWARE)
+-		if(PollForValueKM(&psSGXHostCtl->ui32CleanupStatus,
++		ui32ProbeStart = OSClockus();
++		bProbePollOK = (PollForValueKM(&psSGXHostCtl->ui32CleanupStatus,
+ 						  PVRSRV_USSE_EDM_CLEANUPCMD_COMPLETE,
+ 						  PVRSRV_USSE_EDM_CLEANUPCMD_COMPLETE,
+ 						  2 * MAX_HW_TIME_US/WAIT_TRY_COUNT,
+-						  WAIT_TRY_COUNT) != PVRSRV_OK)
++					  WAIT_TRY_COUNT) == PVRSRV_OK);
++		ui32ProbeStatus = psSGXHostCtl->ui32CleanupStatus;
++		PVR_LOG(("SGXCleanupRequest: type=%u poll=%s status=0x%x elapsed=%uus",
++				 ui32CleanupType, bProbePollOK ? "COMPLETE" : "TIMEOUT",
++				 ui32ProbeStatus, OSClockus() - ui32ProbeStart));
++		if(!bProbePollOK)
+ 		{
+ 			PVR_DPF((PVR_DBG_ERROR,"SGXCleanupRequest: Wait for uKernel to clean up (%u) failed", ui32CleanupType));
+ 			PVR_DBG_BREAK;
