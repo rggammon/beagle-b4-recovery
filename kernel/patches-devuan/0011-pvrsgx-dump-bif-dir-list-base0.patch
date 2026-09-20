@@ -1,0 +1,47 @@
+Subject: [PATCH] pvrsgx 1.6: dump BIF directory-list base at hardware recovery
+
+SGX530 selects one active page directory through EUR_CR_BIF_DIR_LIST_BASE0.
+On a BIF page fault the microkernel raises hardware recovery; HWRecoveryResetSGX
+calls SGXDumpDebugInfo before SGXReset reprograms that register with the BIF
+reset PD. The existing dump records the fault address but not the directory that
+was active when it faulted, so the log cannot show which memory context the GPU
+was using.
+
+Dump EUR_CR_BIF_DIR_LIST_BASE0 in that pre-reset register block, alongside the
+kernel and BIF-reset page-directory device addresses shifted into BASE0 units,
+so the captured base decodes as the kernel PD, the reset PD, or a client PD.
+
+Also log the page-directory device address in MMU_Finalise. A client context
+destroyed while SGX or recovery still selects its directory would show a
+finalized PD whose BASE0 matches the active directory-list base -- the
+prediction under investigation for the 0F0AB000 / 000D0000 / 000E5000 fault
+cascade preceding the PVRSRVProcessQueues teardown Oops.
+
+Diagnostic only: two log statements on the recovery and context-teardown paths,
+no behavioural change. Remove once the faulting directory is identified.
+---
+ .../gpu/drm/pvrsgx/1.6.16.3977/services4/srvkm/devices/sgx/mmu.c    | 4 ++++
+ .../drm/pvrsgx/1.6.16.3977/services4/srvkm/devices/sgx/sgxinit.c    | 6 ++++++
+ 2 files changed, 10 insertions(+)
+
+diff --git a/drivers/gpu/drm/pvrsgx/1.6.16.3977/services4/srvkm/devices/sgx/mmu.c b/drivers/gpu/drm/pvrsgx/1.6.16.3977/services4/srvkm/devices/sgx/mmu.c
+index e7d19fe3b..79ce3416a 100755
+--- a/drivers/gpu/drm/pvrsgx/1.6.16.3977/services4/srvkm/devices/sgx/mmu.c
++++ b/drivers/gpu/drm/pvrsgx/1.6.16.3977/services4/srvkm/devices/sgx/mmu.c
+@@ -1324,0 +1325,4 @@ MMU_Finalise (MMU_CONTEXT *psMMUContext)
++	PVR_LOG(("MMU_Finalise: freeing MMU context 0x%08X PD=0x%08X (BASE0=0x%08X)",
++			(IMG_UINTPTR_T)psMMUContext,
++			psMMUContext->sPDDevPAddr.uiAddr,
++			psMMUContext->sPDDevPAddr.uiAddr >> EUR_CR_BIF_DIR_LIST_BASE0_ADDR_SHIFT));
+diff --git a/drivers/gpu/drm/pvrsgx/1.6.16.3977/services4/srvkm/devices/sgx/sgxinit.c b/drivers/gpu/drm/pvrsgx/1.6.16.3977/services4/srvkm/devices/sgx/sgxinit.c
+index 8b12979ee..3f348c4f8 100755
+--- a/drivers/gpu/drm/pvrsgx/1.6.16.3977/services4/srvkm/devices/sgx/sgxinit.c
++++ b/drivers/gpu/drm/pvrsgx/1.6.16.3977/services4/srvkm/devices/sgx/sgxinit.c
+@@ -971,0 +972 @@ static IMG_VOID SGXDumpDebugInfo (PVRSRV_SGXDEV_INFO	*psDevInfo,
++			SGXDumpDebugReg(psDevInfo, ui32CoreNum, "EUR_CR_BIF_DIR_LIST_BASE0: ", EUR_CR_BIF_DIR_LIST_BASE0);
+@@ -976,0 +978,5 @@ static IMG_VOID SGXDumpDebugInfo (PVRSRV_SGXDEV_INFO	*psDevInfo,
++		PVR_LOG(("SGX PD refs: kernel BASE0=0x%08X reset BASE0=0x%08X (kernelPD=0x%08X resetPD=0x%08X)",
++					psDevInfo->sKernelPDDevPAddr.uiAddr >> EUR_CR_BIF_DIR_LIST_BASE0_ADDR_SHIFT,
++					psDevInfo->sBIFResetPDDevPAddr.uiAddr >> EUR_CR_BIF_DIR_LIST_BASE0_ADDR_SHIFT,
++					psDevInfo->sKernelPDDevPAddr.uiAddr,
++					psDevInfo->sBIFResetPDDevPAddr.uiAddr));
