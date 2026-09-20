@@ -1,0 +1,33 @@
+Subject: [PATCH] pvrsgx 1.6: dump EDM task registers at hardware recovery
+
+The SGX lockup watchdog (SGXOSTimer) declares a hang only when the EDM task
+register it samples -- psDevInfo->ui32EDMTaskReg0, optionally XOR
+ui32EDMTaskReg1 -- is unchanged for three consecutive samples. That progress
+signal is never recorded, so the recovery log cannot show whether the
+microkernel task counter was genuinely frozen or merely advancing slowly.
+
+Dump both EDM task registers (address and value) in SGXDumpDebugInfo, which runs
+before SGXReset. Identical values across consecutive recoveries confirm a real
+microkernel stall; changing values indicate the uKernel is still progressing and
+the watchdog is firing early.
+
+Reads hardware registers only; unlike PVRSRV_USSE_EDM_STATUS_DEBUG /
+PVRSRV_DUMP_MK_TRACE it does not depend on the microkernel build options (which
+would fail the fatal KM/microkernel build-options check against the release
+ukernel). Diagnostic only.
+---
+ .../drm/pvrsgx/1.6.16.3977/services4/srvkm/devices/sgx/sgxinit.c   | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/drivers/gpu/drm/pvrsgx/1.6.16.3977/services4/srvkm/devices/sgx/sgxinit.c b/drivers/gpu/drm/pvrsgx/1.6.16.3977/services4/srvkm/devices/sgx/sgxinit.c
+index 3f348c4f8..3d2fd1dd6 100755
+--- a/drivers/gpu/drm/pvrsgx/1.6.16.3977/services4/srvkm/devices/sgx/sgxinit.c
++++ b/drivers/gpu/drm/pvrsgx/1.6.16.3977/services4/srvkm/devices/sgx/sgxinit.c
+@@ -976,0 +977,7 @@ static IMG_VOID SGXDumpDebugInfo (PVRSRV_SGXDEV_INFO	*psDevInfo,
++			PVR_LOG(("(P%u) EDM_TASK_REG0 [0x%03X]: %08X", ui32CoreNum, psDevInfo->ui32EDMTaskReg0,
++					OSReadHWReg(psDevInfo->pvRegsBaseKM, SGX_MP_CORE_SELECT(psDevInfo->ui32EDMTaskReg0, ui32CoreNum))));
++			if (psDevInfo->ui32EDMTaskReg1 != 0)
++			{
++				PVR_LOG(("(P%u) EDM_TASK_REG1 [0x%03X]: %08X", ui32CoreNum, psDevInfo->ui32EDMTaskReg1,
++						OSReadHWReg(psDevInfo->pvRegsBaseKM, SGX_MP_CORE_SELECT(psDevInfo->ui32EDMTaskReg1, ui32CoreNum))));
++			}
