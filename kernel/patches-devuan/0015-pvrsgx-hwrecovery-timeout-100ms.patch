@@ -1,0 +1,35 @@
+Subject: [PATCH] pvrsgx 1.6: widen SGX HWRecovery watchdog 10ms -> 100ms
+
+The microkernel HWRecovery lockup watchdog fires after
+SYS_SGX_HWRECOVERY_TIMEOUT_FREQ (100 Hz = 10 ms) of no monitored task progress
+(ui32HWRecoverySampleRate = uKernelFreq / HWRecoveryFreq, sampled at the 1 kHz
+uKernel timer). NanoVG/femtovg antialiased fringe rendering trips it about once
+per frame -- EUR_CR_EVENT_STATUS = TIMER only, all BIF registers zero, kernel CCB
+drained, EDM task register still advancing, ui32uKernelDetectedLockups climbing,
+ui32HostDetectedLockups = 0 -- a false lockup: the frame completes (the dump is
+captured post-recovery, so it looks idle) but a per-frame antialiasing-fringe
+stall exceeds the 10 ms no-progress margin.
+
+The watchdog value is a long-standing SGX constant (unchanged across DDK
+1.4.14 - 1.17) and Imagination's own SDK demos trip it, output-size dependent
+(forums.imgtec.com/t/sgx-hardware-recovery-triggered), so 10 ms is inherently
+marginal for heavy 2D renders. Widen the no-progress margin to 100 ms (100 -> 10)
+so antialiased renders finish before the watchdog fires, keeping antialiasing on.
+Genuine hardware hangs take up to 100 ms longer to recover.
+---
+ drivers/gpu/drm/pvrsgx/1.6.16.3977/services4/system/omap3/sysconfig.h | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/gpu/drm/pvrsgx/1.6.16.3977/services4/system/omap3/sysconfig.h b/drivers/gpu/drm/pvrsgx/1.6.16.3977/services4/system/omap3/sysconfig.h
+index c1f5e1077..ba55912e6 100755
+--- a/drivers/gpu/drm/pvrsgx/1.6.16.3977/services4/system/omap3/sysconfig.h
++++ b/drivers/gpu/drm/pvrsgx/1.6.16.3977/services4/system/omap3/sysconfig.h
+@@ -37,7 +37,7 @@
+ #define SYS_SGX_CLOCK_SPEED		110666666
+ #endif
+ 
+-#define SYS_SGX_HWRECOVERY_TIMEOUT_FREQ		(100)	
++#define SYS_SGX_HWRECOVERY_TIMEOUT_FREQ		(10)	
+ #define SYS_SGX_PDS_TIMER_FREQ				(1000)	
+ 
+ #if !defined(SYS_SGX_ACTIVE_POWER_LATENCY_MS)
