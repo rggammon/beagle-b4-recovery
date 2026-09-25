@@ -66,7 +66,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             make curl file binutils coreutils debhelper devscripts dpkg-dev \
-            gcc-arm-linux-gnueabihf libc6-dev-armhf-cross python3-pyelftools
+            build-essential gcc-arm-linux-gnueabihf libc6-dev-armhf-cross \
+            python3-pyelftools
           # Ubuntu's apt patchelf (0.18) mislays .dynamic outside a PT_LOAD on the
           # DWARF-heavy DDK libs; use the newer pip build (0.19+) instead.
           python3 -m pip install --user --break-system-packages 'patchelf>=0.19'
