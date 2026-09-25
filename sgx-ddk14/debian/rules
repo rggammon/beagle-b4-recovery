@@ -1,0 +1,34 @@
+#!/usr/bin/make -f
+
+%:
+	dh $@
+
+override_dh_auto_build:
+	:
+
+override_dh_auto_clean:
+	:
+
+override_dh_auto_install:
+	SDK_ROOT="$(CURDIR)/build/sdk" \
+		RUNTIME_DESTDIR="$(CURDIR)/debian/sgx-ddk14-um" \
+		TOOLS_DESTDIR="$(CURDIR)/debian/sgx-ddk14-tools" \
+		sh ./scripts/stage-runtime.sh
+	SDK_ROOT="$(CURDIR)/build/sdk" \
+		DESTDIR="$(CURDIR)/debian/sgx-ddk14-dev" \
+		sh ./scripts/stage-dev.sh
+
+override_dh_strip:
+	:
+
+override_dh_dwz:
+	:
+
+override_dh_shlibdeps:
+	:
+
+override_dh_makeshlibs:
+	:
+
+override_dh_installinit:
+	dh_installinit --name=powervr

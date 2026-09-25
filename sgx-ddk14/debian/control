@@ -1,0 +1,34 @@
+Source: sgx-ddk14
+Section: non-free/libs
+Priority: optional
+Maintainer: Beagle B4 Recovery Project <noreply@example.invalid>
+Build-Depends: debhelper-compat (= 13)
+Standards-Version: 4.6.2
+Rules-Requires-Root: no
+
+Package: sgx-ddk14-um
+Architecture: armel
+Depends: libc6, libgcc-s1, libstdc++6, ${misc:Depends}
+Conflicts: sgx-ddk16-um, sgx-ddk-um-ti343x
+Replaces: sgx-ddk16-um, sgx-ddk-um-ti343x
+Description: PowerVR SGX530 DDK 1.4 private soft-float userspace
+ Private TI DDK 1.4.14.2616 userspace for OMAP3530 SGX530. The soft-float
+ libraries are isolated under /opt/sgx-ddk14 for use by armel applications.
+
+Package: sgx-ddk14-tools
+Architecture: armel
+Pre-Depends: ${misc:Pre-Depends}
+Depends: sgx-ddk14-um (= ${binary:Version}), ${misc:Depends}
+Conflicts: sgx-ddk16-tools, sgx-ddk-um-tools
+Replaces: sgx-ddk16-tools, sgx-ddk-um-tools
+Description: PowerVR SGX530 DDK 1.4 initialization tools
+ Initialization and diagnostic tools for the matched DDK 1.4.14.2616
+ PowerVR SGX530 userspace.
+
+Package: sgx-ddk14-dev
+Section: non-free/libdevel
+Architecture: armel
+Depends: sgx-ddk14-um (= ${binary:Version}), ${misc:Depends}
+Description: PowerVR SGX530 DDK 1.4 EGL and GLES development files
+ Khronos EGL, OpenGL ES, and TI public extension headers from Graphics SDK
+ 4.00.00.01, with linker and pkg-config metadata for armel applications.

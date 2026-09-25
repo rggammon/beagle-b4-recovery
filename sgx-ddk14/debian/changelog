@@ -1,0 +1,8 @@
+sgx-ddk14 (1.4.14.2616) unstable; urgency=medium
+
+  * Package the SGX103 soft-float DDK 1.4 runtime under /opt/sgx-ddk14.
+  * Add armel loader wrappers, diagnostics, and the PowerVR init service.
+  * Add namespaced public headers and armel pkg-config metadata.
+  * Sourced from TI Graphics SDK 4.00.00.01 (meta-openpandora lineage).
+
+ -- Beagle B4 Recovery Project <noreply@example.invalid>  Fri, 25 Sep 2026 00:00:00 +0000
