@@ -223,6 +223,7 @@ def emit(out, real_soname, headers, subprograms, types, shared_loader=False):
 
     emitted = 0
     skipped = []
+    wrapped = set()
     for name in sorted(subprograms):
         ret_die, params = subprograms[name]
         # eglGetProcAddress returns a function pointer, so it can't be a plain
@@ -242,6 +243,7 @@ def emit(out, real_soname, headers, subprograms, types, shared_loader=False):
             w('    if (!real) real = (fn_t) ddk_sym("eglGetProcAddress");\n')
             w("    return real(procname);\n}\n\n")
             emitted += 1
+            wrapped.add(name)
             continue
         if types.has_fn_pointer(ret_die):
             skipped.append((name, "function-pointer return"))
@@ -284,8 +286,9 @@ def emit(out, real_soname, headers, subprograms, types, shared_loader=False):
         w('    if (!real) real = (fn_t) ddk_sym("%s");\n' % name)
         w("    %sreal(%s);\n}\n\n" % (ret_kw, call_args))
         emitted += 1
+        wrapped.add(name)
 
-    return emitted, skipped
+    return emitted, skipped, wrapped
 
 
 def undefined_functions(elf):
@@ -336,6 +339,9 @@ def main():
                     help="emit a libm reverse interposer instead of a forward shim")
     ap.add_argument("--loader", action="store_true",
                     help="forward through the shared sgxhf_dlsym namespace loader")
+    ap.add_argument("--manifest", default="",
+                    help="write the exported-function ABI surface (one "
+                         "'<F|.|?> name' per line) for the reuse coverage gate")
     args = ap.parse_args()
     headers = [h for h in args.headers.split(",") if h]
 
@@ -362,8 +368,26 @@ def main():
         wanted = exported_functions(elf)
         subs = collect_subprograms(dwarf, types, wanted)
         with open(args.out, "w") as out:
-            emitted, skipped = emit(out, args.real_soname, headers, subs, types,
-                                    shared_loader=args.loader)
+            emitted, skipped, wrapped = emit(out, args.real_soname, headers,
+                                             subs, types, shared_loader=args.loader)
+
+    if args.manifest:
+        # The ABI surface is every exported function, tagged F (float-touching,
+        # needs pcs translation), . (wrapped, ABI-neutral) or ? (no DWARF / not
+        # wrapped). The reuse coverage gate compares a stripped DDK's exports
+        # against this surface to catch any symbol drift between DDK versions.
+        def _tag(n):
+            if n not in subs:
+                return "?"
+            if n not in wrapped:
+                return "?"
+            if types.is_float(subs[n][0]) or any(types.is_float(p[0])
+                                                 for p in subs[n][1]):
+                return "F"
+            return "."
+        with open(args.manifest, "w") as mf:
+            for n in sorted(wanted):
+                mf.write("%s %s\n" % (_tag(n), n))
 
     float_n = sum(
         1 for n in subs

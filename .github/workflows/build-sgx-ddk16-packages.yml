@@ -38,6 +38,21 @@ on:
         required: true
         default: true
         type: boolean
+      build_hf_shim_14:
+        description: Also build the DDK 1.4 shim by reusing the 1.6 veneers
+        required: true
+        default: false
+        type: boolean
+      sdk14_url:
+        description: HTTPS URL for Graphics_SDK_setuplinux_4_00_00_01.bin (DDK 1.4)
+        required: true
+        default: https://software-dl.ti.com/dsps/dsps_public_sw/sdo_sb/targetcontent/gfxsdk/4_00_00_01/exports/Graphics_SDK_setuplinux_4_00_00_01.bin
+        type: string
+      sdk14_sha256:
+        description: Verified SHA-256 of the TI 1.4 installer
+        required: true
+        default: "62383d15e33adf9349afba063b0f2405a15aa6c4b0b5579b0abdf81db7580df7"
+        type: string
 
 jobs:
   build:
@@ -87,6 +102,21 @@ jobs:
           CROSS_HF: arm-linux-gnueabihf-gcc
         run: make hf-shim
 
+      # Reuse the 1.6-DWARF veneers (identical Khronos EGL 1.4/GLES2 ABI) to
+      # build the 1.4 shim. The coverage gate fails on any export-set drift and
+      # the header-diff gate fails on any core ABI header change between SDKs.
+      - name: Build DDK 1.4 hard-float shim (veneer reuse)
+        if: inputs.build_hf_shim && inputs.build_hf_shim_14
+        working-directory: sgx-ddk16
+        env:
+          SDK_URL: ${{ inputs.sdk_url }}
+          SDK_SHA256: ${{ inputs.sdk_sha256 }}
+          SDK14_URL: ${{ inputs.sdk14_url }}
+          SDK14_SHA256: ${{ inputs.sdk14_sha256 }}
+          ACCEPT_TI_EULA: "yes"
+          CROSS_HF: arm-linux-gnueabihf-gcc
+        run: make hf-shim-14
+
       - name: Upload ELF audit
         uses: actions/upload-artifact@v5
         with:
@@ -114,6 +144,17 @@ jobs:
             sgx-ddk16/build/hf-shim/gen/
           if-no-files-found: error
 
+      # 1.4 shim libraries + reuse/header-diff gate artifacts: our own code.
+      - name: Upload DDK 1.4 hard-float shim libraries
+        if: inputs.build_hf_shim && inputs.build_hf_shim_14
+        uses: actions/upload-artifact@v5
+        with:
+          name: sgx-ddk16-hf-shim-14
+          path: |
+            sgx-ddk16/build/hf-shim-14/lib/
+            sgx-ddk16/build/hf-shim-14/gen/
+          if-no-files-found: error
+
       # The patched DDK carries TI binaries; gate it on the same consent flag.
       - name: Upload libSGXm-first patched DDK
         if: inputs.build_hf_shim && inputs.upload_ti_binary_artifacts
@@ -121,5 +162,15 @@ jobs:
         with:
           name: sgx-ddk16-hf-shim-ddk
           path: sgx-ddk16/build/hf-shim/ddk/
+          if-no-files-found: error
+          retention-days: 1
+
+      # The patched 1.4 DDK also carries TI binaries; same consent gate.
+      - name: Upload libSGXm-first patched DDK 1.4
+        if: inputs.build_hf_shim && inputs.build_hf_shim_14 && inputs.upload_ti_binary_artifacts
+        uses: actions/upload-artifact@v5
+        with:
+          name: sgx-ddk16-hf-shim-14-ddk
+          path: sgx-ddk16/build/hf-shim-14/ddk/
           if-no-files-found: error
           retention-days: 1
