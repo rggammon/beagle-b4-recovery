@@ -1,0 +1,20 @@
+# Cross-build config for the B4 (armv7 OMAP3, hard-float) via geoduck-tools.
+#
+# Paths assume the geoduck scratch layout:
+#   sysroot : Debian bookworm armhf (glibc 2.36, matches the board's Devuan daedalus)
+#   shim    : the hard-float SGX DDK 1.6 GLES/EGL veneers (provides libEGL.so at link time)
+#
+# Override with env CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_RUSTFLAGS if the
+# scratch paths move.
+
+[target.armv7-unknown-linux-gnueabihf]
+linker = "arm-linux-gnueabihf-gcc-14"
+rustflags = [
+  "-C", "link-arg=--sysroot=/mnt/scratch/geoduck-tmp/beagle/sysroot-bookworm-armhf",
+  "-C", "target-feature=+v7,+vfp3,+neon",
+  "-L", "/mnt/scratch/geoduck-tmp/beagle/nanovg/hfshim/lib",
+  "-C", "link-arg=-Wl,-rpath-link,/mnt/scratch/geoduck-tmp/beagle/nanovg/hfshim/lib",
+]
+
+[build]
+target = "armv7-unknown-linux-gnueabihf"

@@ -1,0 +1,21 @@
+[package]
+name = "femtovg-probe"
+version = "0.1.0"
+edition = "2021"
+description = "Minimal FemtoVG GLES2 solid-fill probe for the SGX530 hard-float shim"
+
+[[bin]]
+name = "femtovg-probe"
+path = "src/main.rs"
+
+[dependencies]
+# Lean build: skip image-loading + textlayout for the first solid-fill milestone.
+femtovg = { version = "0.27", default-features = false }
+# dlopen the hard-float shim's libEGL.so at runtime (respects LD_LIBRARY_PATH);
+# avoids link-time -lEGL / pkg-config cross-compile issues.
+khronos-egl = { version = "6", features = ["dynamic"] }
+libc = "0.2"
+glow = "0.18"
+
+[profile.release]
+opt-level = 2
