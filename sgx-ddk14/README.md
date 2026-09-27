@@ -1,8 +1,17 @@
 # SGX DDK 1.4 userspace packages
 
-This directory builds Debian packages for the TI Graphics SDK `4.00.00.01`
-`gfx_rel_es2.x` userspace (DDK `1.4.14.2616`). Vendor binaries are downloaded
-or supplied at build time and are never stored in this repository.
+This directory builds Debian packages for the TI Graphics SDK `gfx_rel_es2.x`
+DDK 1.4 userspace. Two builds are supported via `DDK_BUILD`:
+
+| `DDK_BUILD` | TI Graphics SDK | DDK version | Installer |
+| --- | --- | --- | --- |
+| `2616` (default) | `4.00.00.01` | `1.4.14.2616` | `Graphics_SDK_setuplinux_4_00_00_01.bin` |
+| `2514` | `3.01.00.02` | `1.4.14.2514` | `OMAP35x_Graphics_SDK_setuplinux_3_01_00_02.bin` |
+
+Vendor binaries are downloaded or supplied at build time and are never stored in
+this repository. The older `2514` installer pages its EULA and asks "Continue?"
+twice, so its unpack step drives the prompts with `python3` + `python3-pexpect`
+(`scripts/unpack-installjammer.py`); the `2616` installer uses a plain pipe.
 
 The DDK 1.4 stack is the storm-free reference userspace for the SGX530 (see
 `docs/ddk14-pivot-handoff.md`); this package mirrors the `sgx-ddk16` pipeline so
@@ -14,8 +23,8 @@ The matching hard-float ABI shim is produced by `sgx-ddk16`'s `make hf-shim-14`
 ## Local audit
 
 ```sh
-make audit \
-  SDK_INSTALLER=/path/to/Graphics_SDK_setuplinux_4_00_00_01.bin \
+make audit DDK_BUILD=2514 \
+  SDK_INSTALLER=/path/to/OMAP35x_Graphics_SDK_setuplinux_3_01_00_02.bin \
   SDK_SHA256=<verified-sha256> \
   ACCEPT_TI_EULA=yes
 ```
@@ -24,9 +33,10 @@ Alternatively, set `SDK_URL` instead of `SDK_INSTALLER`. A verified SHA-256 is
 required in both modes. Outputs are confined to ignored `build/` and `dist/`
 directories.
 
-The workflow defaults to the official TI `4_00_00_01` URL and the SHA-256
-`62383d15e33adf9349afba063b0f2405a15aa6c4b0b5579b0abdf81db7580df7`
-(from the meta-openpandora `libgles-omap3_4.00.00.01.bb` recipe).
+Pinned installer checksums (also encoded in the CI workflow):
+
+* `2616`: `62383d15e33adf9349afba063b0f2405a15aa6c4b0b5579b0abdf81db7580df7`
+* `2514`: `151d7ce8cbf192a3f0c7e232a5b958cde224309be9ec74ca40031be7d27fa265`
 
 Run `make help` for all targets.
 

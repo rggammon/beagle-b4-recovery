@@ -14,9 +14,17 @@ rm -rf "$OUTPUT"
 mkdir -p "$OUTPUT/home" "$OUTPUT/install"
 chmod 0755 "$INSTALLER"
 
-# This SDK asks only for confirmation and an absolute installation directory.
-printf 'Y\n%s\n' "$OUTPUT/install" | \
-    HOME="$OUTPUT/home" timeout 300 "$INSTALLER" --mode console
+if [ "${UNPACK_PAGED_EULA:-no}" = yes ]; then
+    # Older SDKs (3.01.00.02) page the EULA and ask "Continue?" twice, which a
+    # pre-buffered pipe cannot align; drive the prompts with pexpect.
+    here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+    python3 "$here/unpack-installjammer.py" "$INSTALLER" \
+        "$OUTPUT/install" "$OUTPUT/home"
+else
+    # This SDK asks only for confirmation and an absolute installation directory.
+    printf 'Y\n%s\n' "$OUTPUT/install" | \
+        HOME="$OUTPUT/home" timeout 300 "$INSTALLER" --mode console
+fi
 
 runtime=$(find "$OUTPUT" -type d -name gfx_rel_es2.x -print -quit)
 [ -n "$runtime" ] || {
