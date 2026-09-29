@@ -232,10 +232,18 @@ libsrv_um .1.4.14.2616`). Results: windowed gate `12 1 1 1 8 30` = **0 HWR on
    **CMA exonerated**: clean-boot A/B DISCONTIG 0,1,1 vs CONTIG 0,1,1 — identical
    (an earlier "CONTIG 9× worse" was an accumulation confound on a dirty board).
 3. **Stage 3–4 — PRIME import + `SETCRTC`**: one 1.4-rendered frame on the panel
-   via `dc_nohw → PRIME → omapdrm`.
-4. **Stage 5 — `sgxmode` presenter + `dc_nohw` swap-notify** on 1.4.
+   via `dc_nohw → PRIME → omapdrm`. **← START HERE (2026-09-29).** The FLIP
+   hang that blocked this is fixed (Nokia cache commit, 100/100 soak). Tools are
+   DDK-agnostic: `dc_nohw_kms_present` (`raw` mode) for Stage 3, then
+   `sgx-window-swap` with `SGX_PRESENT` against `/opt/sgx-ddk14` for Stage 4.
+4. **Stage 5 — `sgxmode` presenter + `dc_nohw` swap-notify** on 1.4. The ABI-v2
+   swap-notify implementation (`DCNohwNotifySwap`/`DCNohwNotifySwapchain`) is
+   already in the 1.4 `dc_nohw_export.c`; only the calls from
+   `CreateDCSwapChain`/`DestroyDCSwapChain`/`ProcessFlip` in
+   `dc_nohw_displayclass.c` are missing (copy the 1.6 hook sites).
 5. **Stage 6 — in-kernel `omapdrm_present`** (6a mailbox, 6b paced). **Porting
-   note:** the grafted 1.4 `dcnohw.ko` is likely the plain provider; the Stage 6
+   note:** the 1.4 `dc_nohw` has no `dc_nohw_present.c` (confirmed on the
+   branch); the Stage 6
    `present=` path (`dc_nohw_present.c`, blocking-commit + `DCNohwCompleteFlip`,
    `pfnPVRSRVCmdComplete(..., IMG_TRUE)`) must be ported into the 1.4 `dc_nohw`
    source and rebuilt against `omapdrm`'s `Module.symvers`. The three 6b bugs are
@@ -258,13 +266,12 @@ The Devuan image is **inherently 1.6** at three layers, so today's 1.4 work is a
 live-board hand-swap (reboot = back to 1.6 control). Baking a 1.4 image (Stage 8)
 means:
 
-- **Kernel** (`kernel/config-devuan`: only `CONFIG_PVRSGX_1_6_16_3977=y`
-  `+_DC_NOHW=m`; `kernel/build-devuan.sh` `REF` pins the 1.6 Stage-6b commit
-  `214a35`): switch to `CONFIG_PVRSGX_1_4_14_2616=y` + the fork branch
-  `users/rgammon/pvrsgx-1.4.14.2616`, carrying the graft fixes already in repo
-  memory (`-DMODULE` in both 1.4 Kbuilds, IRQ 21→37, and build dc_nohw via the
-  `CONFIG_PVRSGX_1_6_16_3977_DC_NOHW=y` top-Makefile path). The 1.4 dc_nohw must
-  also get the Stage 6 `present=` port first.
+- **Kernel**: `kernel/build-devuan.sh` `REF` now pins the fork's
+  `users/rgammon/b4-7.2` integration branch, which carries both DDKs and all the
+  1.4 build fixes (dc_nohw second pass, DT IRQ, APM 100). Switching is a
+  `kernel/config-devuan` change only: `CONFIG_PVRSGX_1_4_14_2616=y` +
+  `CONFIG_PVRSGX_1_4_14_2616_DC_NOHW=m` instead of the 1.6 pair. The 1.4
+  dc_nohw must get the Stage 6 `present=` port first.
 - **Userspace** (`rootfs/build-devuan.sh` installs only `sgx-ddk16-*` armel
   debs): package the 1.4 SuperZaxxon runtime (staged at `/opt/sgx-ddk14`) as
   debs, point rootfs at them.
