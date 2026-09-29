@@ -3,20 +3,20 @@
 # the Devuan/SGX image: zImage + omap3-beagle-ab4.dtb (the C70/32 kHz timer fix) +
 # modules, including the pvrsrvkm SGX530 module (CONFIG_SGX_OMAP=m).
 #
-# Patches applied (kernel/patches-devuan/): all four recovery-kernel hardware fixes,
-# a Linux 7.2 MMC recovery-state fix, and the DDK 1.6 SGX IRQ + APM-latency fixes.
+# Patches applied (kernel/patches-devuan/): the recovery-kernel board/hardware fixes and
+# a Linux 7.2 MMC recovery-state fix. All SGX/DDK changes are commits in the fork.
 #
-# The DDK sources are committed on the fork's DDK 1.6 branch, so a plain clone tracks
-# them (no submodule / separate download needed).
+# The fork's users/rgammon/b4-7.2 integration branch merges the DDK topic branches
+# (users/rgammon/pvrsgx-1.6.16.3977, users/rgammon/pvrsgx-1.4.14.2616); config-devuan
+# selects which DDK is built.
 #
 # Env: CROSS_COMPILE (default arm-linux-gnueabihf-), JOBS (default nproc), WORK, OUT,
 #      OPENPVRSGX_REPO (default the rggammon fork), OPENPVRSGX_REF (branch or commit to
-#      build; default the hardware-validated DDK 1.6 Stage 6b commit + the dc_nohw
-#      stale-swapchain reclaim fix).
+#      build; default the pinned b4-7.2 integration commit).
 set -eu
 
 REPO=${OPENPVRSGX_REPO:-https://github.com/rggammon/linux_openpvrsgx}
-REF=${OPENPVRSGX_REF:-214a35fbc02e3ff5cdb6ef0eda245aec28b14e28}
+REF=${OPENPVRSGX_REF:-079d036db665c4af56c29ef6e03e4968a8f35894}
 CROSS=${CROSS_COMPILE:-arm-linux-gnueabihf-}
 JOBS=${JOBS:-$(nproc)}
 here=$(cd "$(dirname "$0")" && pwd)
@@ -51,7 +51,7 @@ fi
 cd "$src"
 echo ">> OpenPVRSGX commit $(git rev-parse HEAD)"
 
-# Recovery hardware fixes + DDK 1.6 SGX IRQ/APM fixes.
+# Recovery board/hardware fixes.
 # -l --fuzz=3: the hsmmc patch is ported from the 6.6 tree, so line offsets differ.
 for p in "$here"/patches-devuan/*.patch; do
     if patch -p1 -l -R --dry-run -f <"$p" >/dev/null 2>&1; then

@@ -141,11 +141,17 @@ SGX fixes needed by each image.
 
 ### Devuan GPU kernel (against OpenPVRSGX Linux 7.2) — `kernel/patches-devuan/`
 
-`kernel/build-devuan.sh` applies these seven patches to the fork's DDK 1.6 branch
-(`rggammon/linux_openpvrsgx`, `users/rgammon/pvrsgx-1.6.16.3977`) and builds
-`CONFIG_PVRSGX_1_6_16_3977` + `dc_nohw` (the Phase 0 stack from the presentation plan).
-The AB4 timer correction is still supplied by building
-`omap3-beagle-ab4.dtb`; it is not an additional patch.
+`kernel/build-devuan.sh` applies these board patches to the fork's integration branch
+(`rggammon/linux_openpvrsgx`, `users/rgammon/b4-7.2`, pinned by commit) and builds the
+DDK selected by `config-devuan` + `dc_nohw`. The AB4 timer correction is still supplied
+by building `omap3-beagle-ab4.dtb`; it is not an additional patch.
+
+All SGX/DDK fixes are commits on the fork's topic branches, which `b4-7.2` merges:
+`users/rgammon/pvrsgx-1.6.16.3977` (DDK 1.6: 7.2 port, `dc_nohw` presentation, SGX IRQ
+from the device tree, 100 ms active-power latency, swapchain-teardown containment,
+stranded-sync reconcile at HW recovery) and `users/rgammon/pvrsgx-1.4.14.2616` (DDK 1.4,
+see [docs/ddk14-pivot-handoff.md](docs/ddk14-pivot-handoff.md)). Diagnostics and
+experiments from the DDK 1.6 investigation are kept on `users/rgammon/pvrsgx-1.6-debug`.
 
 - **`0001-omap3-beagle-board-usb-mmc-nand.patch`** — applies the same board DT
   corrections as the recovery kernel: force the MUSB OTG port into host mode, disable
@@ -169,25 +175,20 @@ The AB4 timer correction is still supplied by building
   `MQRQ_XFER_SINGLE_BLOCK` flag when a blk-mq tag is reused for a new request, while
   preserving it across retries of the same failed request. Without this, tags that had
   entered recovery remained permanently limited to CMD24 single-sector writes.
-- **`0008-pvrsgx-sgx-irq-37.patch`** — the fix for the residual `EVENT_OBJECT_WAIT`
-  stall. The DDK's `SYS_OMAP3430_SGX_IRQ` requested raw IRQ **21**, which on the DT 7.2
-  kernel is _virq_ 21 = **hwirq 5** — the wrong INTC line. `/proc/interrupts` showed
-  `21: 0 INTC 5 Edge SGX ISR` with the count stuck at **0**: the SGX render-complete
-  interrupt was never delivered, so every `PVRSRVEventObjectWait` fell through to its poll
-  timeout and rendering hung on the first frame. The `omap-intc` linear `irq_domain`
-  allocates virqs from 16, so SGX hwirq 21 maps to **virq 37**. Requesting 37 lands the
-  ISR on the correct line. Verified on hardware: the count climbs with rendering and a
-  serialized render/flip soak runs to completion with no timeout flood (~30 ms/frame,
-  native parity).
-- **`0009-pvrsgx-apm-latency-500ms.patch`** — raises the SGX active-power-management idle
-  latency (`SYS_SGX_ACTIVE_POWER_LATENCY_MS`) from **1 ms** to **500 ms**. At 1 ms the DDK
-  powers the SGX domain down and up on essentially every serialized frame; each transition
-  takes the `PVRSRVPowerLock` (a test-and-set spun with a fixed ~1 s timeout), and under a
-  long soak one transition eventually stalls long enough that a concurrent render kick's
-  lock times out and returns `PVRSRV_ERROR_UNABLE_TO_LOCK_RESOURCE(104)`. With frames
-  ~30 ms apart, 500 ms keeps the GPU powered throughout active rendering (no per-frame
-  power cycling) while still powering down on genuine idle. Fixes the 2000-frame soak that
-  previously aborted around frame 1500.
+Two SGX fixes that used to be patches here, now fork commits, explain behaviour worth
+knowing:
+
+- **SGX IRQ from the device tree** — the DDK's `SYS_OMAP3430_SGX_IRQ` requested raw IRQ
+  **21**, which on the DT 7.2 kernel is _virq_ 21 = **hwirq 5**, the wrong INTC line:
+  `/proc/interrupts` showed `21: 0 INTC 5 Edge SGX ISR`, the render-complete interrupt was
+  never delivered, and rendering hung on the first frame. The `omap-intc` `irq_domain`
+  allocates virqs from 16, so SGX hwirq 21 is **virq 37** on this board. Instead of
+  hardcoding 37, the DDK now maps the interrupt from the `ti,omap3430-gpu` DT node.
+- **Active-power latency 100 ms** — the DDK default of **1 ms** powers the SGX down and up
+  on essentially every frame; each transition takes `PVRSRVPowerLock` (~1 s spin timeout),
+  and a long serialized soak eventually hit `PVRSRV_ERROR_UNABLE_TO_LOCK_RESOURCE(104)`.
+  100 ms (what the newer DDKs in the fork use) keeps the GPU powered while rendering and
+  still powers it down on real idle.
 
 #### MMC patch evidence
 
