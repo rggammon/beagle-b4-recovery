@@ -2,6 +2,15 @@
 
 Satellite of the [DDK 1.6 `dc_nohw` presentation plan](ddk16-dcnohw-presentation-plan.md).
 
+> **Plan pivot (2026-09-25).** The ship target is now DDK `1.4.14.2616`; the
+> Stage 6 in-kernel `omapdrm_present` flip described here is **validated on DDK
+> 1.6 and stands as the reference implementation** to reproduce on the 1.4
+> Services (the `omapdrm`/`dc_nohw` pieces are stack-agnostic — `dc_nohw` is
+> DDK-1.8-derived and already runs against 1.4). See the
+> [Plan Pivot section in the main plan](ddk16-dcnohw-presentation-plan.md) for
+> the rationale (two root-caused DDK-1.6 ukernel regressions absent on 1.4,
+> same-board). Stage 7 app validation targets **Slint**, not a game.
+
 These stages continue after **Stage 5** — the transparent userspace presenter
 (`sgxmode`) driving an **unmodified** game via the `dc_nohw` swap-notify (Stages
 0–5 live in the main plan). **Stage 6 is complete (2026-09-10):** both Phase 6a
@@ -203,12 +212,19 @@ its own `SETCRTC`/modeset — a Stage 8 hardening item.
 
 ## Stage 7: Application Validation
 
-Move from the synthetic cube to OpenQuartz or GLQuake, unchanged, through the
-Stage 6 path.
+Move from the synthetic cube to the real appliance UI — **Slint** (its
+femtovg/nanovg GLES2 renderer) — through the Stage 6 path. The specific
+screen-saver soak app under validation is tracked in a separate effort; it is the
+primary long-run soak target here.
 
-- Compile the game **soft-float** from source (the DDK userland is soft-float).
-- A hard-float→soft-float GLES shim is a documented **fallback only**, for closed
-  hard-float binaries — not the default path.
+- Build Slint and the app **soft-float** from source (the DDK userland is
+  soft-float). A hard-float→soft-float GLES shim is a documented **fallback
+  only**, for closed hard-float binaries — not the default path.
+- Prefer the batched/uber-shader render path validated in the storm work
+  (nanovg-style single program, or Slint with `cache-rendering-hint`) so the app
+  stays off the fringe×churn pattern — belt-and-braces even though the 1.4 ship
+  target does not storm on it.
+- An OpenQuartz/GLQuake-class game remains an optional secondary validation.
 
 ### Pass Criteria
 
@@ -224,12 +240,15 @@ Integrate the validated stack into the image as a boot-to-launcher appliance.
 
 ### Deliverables
 
-- Reproducible kernel patches and configuration; version-matched DDK 1.6 SGX103
-  runtime staging.
+- Reproducible kernel patches and configuration; version-matched **DDK 1.4
+  SGX103** runtime staging (ship target). The DDK 1.6 runtime is kept staged as
+  the diagnostic reference control, not shipped.
 - `dc_nohw` (buffer provider + swap-notify), the `omapdrm_present` patch,
   `sgxmode` (prototype) and `vtrun` (generic launcher), and test programs.
 - A serial launcher menu that runs each app under `vtrun` (one fullscreen app at
   a time); `fbcon` kept (6a) or unbound (6b) per build.
 - Automated Stage 0 smoke test and longer soak test.
 - B4 KMS configuration and a separate Pandora display-validation checklist.
-- Recovery instructions that preserve the existing DDK 1.4 fallback.
+- Recovery instructions and an A/B path that keep DDK 1.6 installed as the
+  diagnostic reference control (the roles are now inverted: 1.4 ships, 1.6 is the
+  reference).

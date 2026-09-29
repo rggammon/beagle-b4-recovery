@@ -26,7 +26,7 @@ soft-float SGX530 DDK 1.6 through the ABI shim — i.e. a real, draw-heavy app
 
 NanoVG (`nanovg.c` + the demo) calls libm directly — `sinf cosf sqrtf fmodf
 atan2f` and `sin`. Those are the **app's own** libm calls in the base process; they
-resolve to the board's **hard-float** libm, *not* through the shim (the shim only
+resolve to the board's **hard-float** libm, _not_ through the shim (the shim only
 covers GLES/EGL, and `libSGXm` lives inside the private dlmopen namespace).
 
 That's ABI-fine (hard-float app + hard-float libm), but there's a **symbol-version**
@@ -38,14 +38,14 @@ glibc 2.41) and CI (Ubuntu 24.04, glibc 2.39) are both too new.
 Pick one of:
 
 1. **Robust — build against a glibc-2.36 armhf sysroot** (matches the board).
-   The Devuan daedalus armhf rootfs *is* glibc 2.36; either build inside it or point
+   The Devuan daedalus armhf rootfs _is_ glibc 2.36; either build inside it or point
    the cross compiler at it with `--sysroot`. This is what a pipeline/`.deb` build
    should do.
 2. **Quick spike — static libm** so no versioned `fmodf` reference survives:
    `-Wl,-Bstatic -lm -Wl,-Bdynamic`. Fine for a one-off validation; embeds the
    build host's libm code, self-contained at run time.
 
-The GLES/EGL float boundary is *not* the problem here — see "ABI reality" below.
+The GLES/EGL float boundary is _not_ the problem here — see "ABI reality" below.
 
 ## Build (on geoduck)
 
@@ -55,7 +55,7 @@ headers, and the built shim libs under `/mnt/scratch/geoduck-tmp/beagle/nanovg`:
 - DDK GLES2/EGL headers: `sysroot/usr/include/sgx-ddk16`
 - shim libs (link `-lEGL -lGLESv2` against these): `hfshim/lib`
 - NanoVG sources: clone `memononen/nanovg` @ `ce3bf745…` and use its `src/nanovg.c`
-  + headers; the harness is this repo's `tools/nanovg-demo.c`.
+  - headers; the harness is this repo's `tools/nanovg-demo.c`.
 
 Quick-spike build (static libm to dodge the glibc skew):
 
@@ -142,7 +142,7 @@ its own veneer (not a raw DDK pointer), so that path is covered too.
   `LIBSGXM_TRACE=1 sgx-ddk16-hf-run … 2>&1 | grep 'libSGXm: wrap'` and compare the
   bad pixel to the soft-float build.
 - gdb is installed on the board (`gdb 13.1`); `sgx-ddk16-hf-run gdb --args
-  /root/nanovg-demo-hf 60` then `run` / `bt` for a backtrace. The DDK libs carry
+/root/nanovg-demo-hf 60` then `run` / `bt` for a backtrace. The DDK libs carry
   DWARF (real file:line).
 
 ## Folding into the image / CI (optional, after it's proven)

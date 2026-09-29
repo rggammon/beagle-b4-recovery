@@ -8,15 +8,15 @@ kernel 2.6.27) — same silicon family, older DDK.
 ## TL;DR
 
 Slint's FemtoVG renderer drives the SGX530 into a **per-frame firmware Hardware
-Recovery (HWR) storm** — one GPU reset on *every* rendered frame, throttling the
+Recovery (HWR) storm** — one GPU reset on _every_ rendered frame, throttling the
 UI to ~2 fps. It is **not** a teardown/kill bug (that was a separate, since-fixed
-issue) and **not** anti-aliasing or gradient *textures*. The trigger is a
+issue) and **not** anti-aliasing or gradient _textures_. The trigger is a
 two-factor interaction, reproduced in dependency-free C:
 
 > **Heavy anti-aliased fringe geometry (tile-spanning AA sliver strips) drawn with
 > a render-state change (`glUseProgram` / `glBindTexture`) in front of each draw.**
 
-Remove *either* factor and the storm drops to a flat zero. nanovg draws the
+Remove _either_ factor and the storm drops to a flat zero. nanovg draws the
 identical picture cleanly because it renders everything under **one** shader
 program (no per-draw state regeneration).
 
@@ -28,7 +28,7 @@ program (no per-draw state regeneration).
   `SGXOSTimer() detected SGX lockup` line preceding it.
 - Cadence is **metronomic**: measured 29 consecutive HWR events spaced
   0.46–0.53 s apart (mean ≈ 0.49 s) — **exactly one reset per frame**, never a
-  frame skipped or doubled. The ~0.49 s/frame *is* the reset-recovery latency;
+  frame skipped or doubled. The ~0.49 s/frame _is_ the reset-recovery latency;
   the storm throttle is the frame time.
 
 ## Reset origin — firmware ukernel HWR, not the host watchdog
@@ -53,23 +53,23 @@ reset.
 
 ## What was ruled out
 
-| Hypothesis | Test | Result |
-|---|---|---|
-| Session teardown / SIGKILL bug | kill mid-render, single-clock kmsg markers | Teardown is prompt (~0.17 s) and clean; storm is a render-phase event |
-| Anti-aliasing per se | femtovg `tilesrsolid` vs `tilesrsolidnoaa` | **Both clean**, 9.7 fps — AA alone not the trigger |
-| Gradient *texture* upload | GL trace: `glTexImage2D` count | **0 in both** clean and storming frames — no gradient texture exists |
-| Cold-buffer / warm-up | every window frame is a fresh swap (always "cold") | Storm stops only when *work* lightens (caching), not with warm-up |
-| State churn alone | `state-churn.c`: 48 prog + 48 tex switches, trivial geometry | **Clean** — state-change count alone does not storm |
-| Per-frame geometry upload | `tilerepro` NOUPLOAD (static VBO) | **Still storms** — upload is innocent |
-| Host watchdog too aggressive | patch 0015 widen 10→100 ms | No change — firmware-originated |
+| Hypothesis                     | Test                                                         | Result                                                                |
+| ------------------------------ | ------------------------------------------------------------ | --------------------------------------------------------------------- |
+| Session teardown / SIGKILL bug | kill mid-render, single-clock kmsg markers                   | Teardown is prompt (~0.17 s) and clean; storm is a render-phase event |
+| Anti-aliasing per se           | femtovg `tilesrsolid` vs `tilesrsolidnoaa`                   | **Both clean**, 9.7 fps — AA alone not the trigger                    |
+| Gradient _texture_ upload      | GL trace: `glTexImage2D` count                               | **0 in both** clean and storming frames — no gradient texture exists  |
+| Cold-buffer / warm-up          | every window frame is a fresh swap (always "cold")           | Storm stops only when _work_ lightens (caching), not with warm-up     |
+| State churn alone              | `state-churn.c`: 48 prog + 48 tex switches, trivial geometry | **Clean** — state-change count alone does not storm                   |
+| Per-frame geometry upload      | `tilerepro` NOUPLOAD (static VBO)                            | **Still storms** — upload is innocent                                 |
+| Host watchdog too aggressive   | patch 0015 widen 10→100 ms                                   | No change — firmware-originated                                       |
 
 ## GL-level diff (per frame, via LD_PRELOAD interposer `tools/gl-trace.c`)
 
-| Mode | draws | verts | bytes | glUseProgram | glBindTexture | glTexImage2D | Result |
-|---|---|---|---|---|---|---|---|
-| femtovg `tilesgrect` (gradient plain rect) | 2 | 16 | 352 | 4 | 7 | 0 | clean 9.8 fps |
-| femtovg `tilesredraw` (gradient rounded) | **48** | **2304** | **37 KB** | **48** | **97** | 0 | **STORM 2.3 fps** |
-| nanovg (gradient rounded, uber-shader) | 16 | 880 | 14 KB | **2** | 3 | 0 | clean 9.2 fps |
+| Mode                                       | draws  | verts    | bytes     | glUseProgram | glBindTexture | glTexImage2D | Result            |
+| ------------------------------------------ | ------ | -------- | --------- | ------------ | ------------- | ------------ | ----------------- |
+| femtovg `tilesgrect` (gradient plain rect) | 2      | 16       | 352       | 4            | 7             | 0            | clean 9.8 fps     |
+| femtovg `tilesredraw` (gradient rounded)   | **48** | **2304** | **37 KB** | **48**       | **97**        | 0            | **STORM 2.3 fps** |
+| nanovg (gradient rounded, uber-shader)     | 16     | 880      | 14 KB     | **2**        | 3             | 0            | clean 9.2 fps     |
 
 The storming frame is distinguished by **48 draws each preceded by a program /
 texture switch**, over heavy rounded-fill + fringe geometry. nanovg draws the
@@ -83,12 +83,12 @@ along the outward normal. Three independent knobs isolate the factors.
 
 Bisection matrix (12 tiles, seg=8, 30 frames, single-clock kmsg phase markers):
 
-| Mode | fringe | per-draw churn | per-frame upload | HWR / 30 frames |
-|---|---|---|---|---|
-| **FULL** | ✅ | ✅ | ✅ | **30 (storm, 1/frame)** |
-| NOCHURN | ✅ | ❌ | ✅ | **0 (clean)** |
-| NOFRINGE | ❌ | ✅ | ✅ | **0 (clean)** |
-| NOUPLOAD | ✅ | ✅ | ❌ | **31 (storm)** |
+| Mode     | fringe | per-draw churn | per-frame upload | HWR / 30 frames         |
+| -------- | ------ | -------------- | ---------------- | ----------------------- |
+| **FULL** | ✅     | ✅             | ✅               | **30 (storm, 1/frame)** |
+| NOCHURN  | ✅     | ❌             | ✅               | **0 (clean)**           |
+| NOFRINGE | ❌     | ✅             | ✅               | **0 (clean)**           |
+| NOUPLOAD | ✅     | ✅             | ❌               | **31 (storm)**          |
 
 **Conclusion:** the storm requires **both** the fringe geometry **and** the
 per-draw state change. Neither alone storms. Per-frame upload is irrelevant.
@@ -99,14 +99,14 @@ Every `glUseProgram` / `glBindTexture` forces the driver to regenerate the
 PDS / TA render-state metadata for the following draw. That is cheap when the
 draw is light (state-churn with trivial triangles → clean). But when the
 following draw is a **heavy tile-spanning AA fringe strip** (many slivers →
-large per-tile primitive-list work), the combination — *regenerate render state,
-then tile a fringe* — repeated ~48× per frame makes no ukernel-monitored progress
+large per-tile primitive-list work), the combination — _regenerate render state,
+then tile a fringe_ — repeated ~48× per frame makes no ukernel-monitored progress
 within the window, and the firmware raises HWR. Under a **single program**
 (nanovg's uber-shader, or `NOCHURN`) the fringe tiles without per-draw regen, the
 render advances, and it stays clean.
 
-This is consistent with the vendor's own guidance (*PowerVR Performance
-Recommendations*: minimize render-state changes, batch draws) — SGX530 is a
+This is consistent with the vendor's own guidance (_PowerVR Performance
+Recommendations_: minimize render-state changes, batch draws) — SGX530 is a
 tile-based deferred renderer whose parameter/state management is the scarce
 resource, not raw fill rate. Community reports corroborate the shape:
 imgtec-forum users see SGX HWR "lockups get worse with larger" output, and TI's
@@ -117,7 +117,7 @@ imgtec-forum users see SGX HWR "lockups get worse with larger" output, and TI's
 The GPU is not too slow — nanovg renders the same fill rate at 9 fps clean. The
 firmware's recovery model is too blunt: it cannot distinguish a legitimately
 busy-but-progressing render from a wedge, has no preemption or partial drain, and
-fails closed to a full reset. Because the offending pattern is present in *every*
+fails closed to a full reset. Because the offending pattern is present in _every_
 frame's command stream, the reset fires once per frame, deterministically.
 
 ## Tuning guidance — how to keep femtovg / Slint on this GPU

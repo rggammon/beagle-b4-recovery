@@ -29,15 +29,15 @@ Every practice below either **caches** the heavy render so it happens once, or
 
 2. **Animate transforms, not content.** Cached items stay cheap only while the
    animated property is a **transform** (`x`/`y`, `opacity`, `scale`, `rotation`).
-   Animating a cached item's *content* (gradient shifting inside it, size change,
+   Animating a cached item's _content_ (gradient shifting inside it, size change,
    text/color change) **invalidates the cache and re-bakes every frame** — straight
    back to the 2.3 fps storm. Move, fade, and scale cached tiles freely; don't
-   animate what's *inside* them.
+   animate what's _inside_ them.
 
 3. **Prefer solid fills and plain-rectangle gradients on hot paths.** The storm is
    specifically the **gradient × rounded × per-draw-state-change** combination.
-   Measured clean at ~9.7–9.8 fps: solid rounded tiles, and gradient *plain*
-   rectangles. Measured storm: gradient *rounded* tiles. If a live-updating element
+   Measured clean at ~9.7–9.8 fps: solid rounded tiles, and gradient _plain_
+   rectangles. Measured storm: gradient _rounded_ tiles. If a live-updating element
    must animate its content, make it a solid fill or a plain-rect gradient.
 
 4. **Keep the first frame cheap.** Even with caching, the initial cold bake costs a
@@ -84,6 +84,7 @@ dmesg | grep -c HWRecoveryResetSGX
 ```
 
 Interpretation:
+
 - **0 resets (or a small one-time startup count, then clean)** and fps well above
   2 → clean. Good.
 - **Resets accumulating ~1 per frame** and fps pinned near 2 → the screen is
@@ -92,21 +93,21 @@ Interpretation:
 
 Reference numbers (tile demo, this board):
 
-| Config | fps | HWR (15 s) | Verdict |
-|---|---|---|---|
-| cache off | 2.3 | 25 (≈1/frame) | storm |
-| cache on | 19.1 | 9 (startup only) | clean |
-| software renderer | *(measure per app)* | 0 (no GPU) | always safe |
+| Config            | fps                 | HWR (15 s)       | Verdict     |
+| ----------------- | ------------------- | ---------------- | ----------- |
+| cache off         | 2.3                 | 25 (≈1/frame)    | storm       |
+| cache on          | 19.1                | 9 (startup only) | clean       |
+| software renderer | _(measure per app)_ | 0 (no GPU)       | always safe |
 
 ## Quick reference
 
-| Symptom | Cause | Fix |
-|---|---|---|
-| Screen stuck ~2 fps, dmesg full of `HWRecoveryResetSGX` | Uncached heavy vector re-render each frame | `cache-rendering-hint`; animate transforms only |
-| Was clean, storms after adding an animation | Animation dirties cached content → re-bake | Animate transform, not content; or solid/plain-rect paint |
-| ~0.5 s flicker + ~8 resets at launch | Cold cache bake | Cheap first frame / staggered bake (cosmetic only) |
-| Must live-update content and still storms | gradient × rounded × churn | Solid fill or plain-rect gradient; or software renderer |
-| Can't guarantee a screen is safe | GPU fragility | `SLINT_BACKEND=winit-software` |
+| Symptom                                                 | Cause                                      | Fix                                                       |
+| ------------------------------------------------------- | ------------------------------------------ | --------------------------------------------------------- |
+| Screen stuck ~2 fps, dmesg full of `HWRecoveryResetSGX` | Uncached heavy vector re-render each frame | `cache-rendering-hint`; animate transforms only           |
+| Was clean, storms after adding an animation             | Animation dirties cached content → re-bake | Animate transform, not content; or solid/plain-rect paint |
+| ~0.5 s flicker + ~8 resets at launch                    | Cold cache bake                            | Cheap first frame / staggered bake (cosmetic only)        |
+| Must live-update content and still storms               | gradient × rounded × churn                 | Solid fill or plain-rect gradient; or software renderer   |
+| Can't guarantee a screen is safe                        | GPU fragility                              | `SLINT_BACKEND=winit-software`                            |
 
 ## Bottom line
 

@@ -2,8 +2,11 @@
 
 ## Goal
 
-Present a rotating GLES2 cube and then an OpenGL game such as OpenQuartz on
-OMAP3 SGX530 revision 1.0.3 hardware using TI DDK `1.6.16.3977` on Linux 7.2.
+Present a rotating GLES2 cube and then the appliance UI (**Slint**) on OMAP3
+SGX530 revision 1.0.3 hardware on Linux 7.2. The ship target is TI DDK
+`1.4.14.2616` — the stack that shipped on this silicon and is free of the DDK 1.6
+ukernel regressions; the completed DDK `1.6.16.3977` port is retained as the
+reference implementation and diagnostic control (see **Plan Pivot** below).
 
 The presentation boundary is the open-source `dc_nohw` DisplayClass provider:
 
@@ -26,9 +29,113 @@ changes and the DDK build-option audit are in
 [DDK 1.6 Linux 7.2 port notes](ddk16-linux72-port-notes.md). The existing B4
 KMS/display investigation is in [BTT HDMI7 and OMAP DRM notes](btt-hdmi7-omapdrm.md).
 
+## Plan Pivot (2026-09-25): ship on DDK 1.4, keep DDK 1.6 as the reference
+
+**Decision.** The appliance ship target moves from DDK `1.6.16.3977` to DDK
+`1.4.14.2616`. The completed 1.6 `dc_nohw`/`omapdrm` presentation work (Stages
+0–6) is retained as the **reference implementation** and diagnostic control, and
+the same integration is now **brought forward onto the 1.4 stack** — the stack
+that actually shipped on this silicon.
+
+**Why.** A same-board control settled the DDK-vs-hardware question with zero
+confounds: on the identical B4 (same kernel `7.2.0-g214a35fbc02e-dirty`, same
+SGX530 SGX103 core, same 1024x600 pbuffer, same binary), only the DDK differs —
+and DDK 1.4 is storm-free where 1.6 storms, and 2–3× faster:
+
+| pbuffer workload (same board) | DDK 1.6.16 | DDK 1.4.14 |
+| ----------------------------- | ---------: | ---------: |
+| fringe×churn 12 tiles / 150 f |     10 HWR |      **0** |
+| fringe×churn 24 tiles / 150 f |     20 HWR |      **0** |
+| wall time (24t / 150 f)       |       12 s |    **4 s** |
+
+This is the **second** root-caused DDK-1.6-specific ukernel regression on this
+core, both absent on 1.4:
+
+1. **Depth-clear storm** — `glClear(GL_DEPTH_BUFFER_BIT)` on an
+   `EGL_DEPTH_SIZE=0` config → per-frame `HWRecoveryResetSGX` (bisected in
+   `tools/tri-inline.c`; = Chromium `gl_clear_broken`, id 95).
+2. **Fringe×churn render storm** — heavy AA-fringe geometry drawn with a
+   per-draw program/texture change → the ukernel raises HWR itself (firmware
+   MISR path, not the host watchdog) instead of making forward progress.
+   Reproduced dependency-free in `tools/tilerepro.c` (window) and
+   `tools/tilerepro-pbuffer.c` (offscreen). The window/flip swapchain path is a
+   strong amplifier (30 HWR/30 frames) over pbuffer (sporadic), but 1.4 is clean
+   on both.
+
+**Provenance backs this up.** The only devices _confirmed_ to carry SGX530 rev
+1.0.3 (SGX103) are the classic BeagleBoard and Pandora Classic, and **both
+shipped DDK 1.4**. TI's 1.6 SGX103 payload exists (recovered from Graphics SDK
+`4.03.00.02`) and was advertised in the Angstrom OMAP3 feed, but no rev-1.0.3
+device is confirmed to have adopted it as a validated stack; the 1.6/1.7 line was
+validated against the newer OMAP3630/DM3730 core (SGX530 rev 1.2.5, "SGX125").
+Stage 0 performance is identical between 1.4 and 1.6 (0.205 vs 0.204 ms median),
+and the 1.4 userspace is the exact soft-float runtime shipped on OpenPandora —
+better-pedigreed on this exact silicon.
+
+**What it costs.** No capability or performance loss (SGX530 is GLES 2.0 /
+EGL 1.4 regardless of DDK; 1.4 matched or beat 1.6 in every measurement). The
+real cost is **re-validating the Stage 1–8 `dc_nohw`/KMS window-surface path on
+1.4** — those stages were built and validated on 1.6, and the 1.4 stack has so
+far only been exercised through pbuffer. The good news: `dc_nohw` is
+**DDK-1.8-derived and already runs against both** stacks (the same-board 1.4
+control used the grafted 1.4 `pvrsrvkm.ko` + `dcnohw.ko`), and the 1.6 Services
+port is a complete, working blueprint — so this is a port-with-reference, not a
+from-scratch effort.
+
+**Status of the completed stages under the pivot.** Stages 0–6 remain _validated
+on 1.6_ and stand as the reference. Each is re-opened as a **"reproduce on 1.4"**
+task: Stage 0 already passes on the 1.4 pbuffer path; Stages 1–6 need the 1.4
+window-surface/swapchain + `omapdrm_present` path re-validated against the 1.4
+Services. DDK 1.6 stays installed as the diagnostic control for A/B regression
+work.
+
+**Per-stage regression gate (run at the end of EVERY 1.4 stage).** The
+fringe×churn storm repro is the early-warning canary: it is **clean on DDK 1.4
+and Pandora but storms on DDK 1.6** on this exact silicon, so it directly detects
+a reintroduced firmware-class stall the moment the port adds it — before it
+reaches the app in Stage 7. At the end of every 1.4 stage (1–8), run it and
+require **zero `HWRecoveryResetSGX`**:
+
+- Offscreen (works from Stage 0 on, no window needed):
+  `/lib/ld-linux.so.3 --library-path /opt/sgx-ddk14/usr/lib
+/root/tilerepro-pbuffer 24 1 1 1 12 150` → expect **0** HWR (DDK 1.6 gives
+  ~20).
+- Windowed (add once the Stage 1 `dc_nohw` window surface works, since the
+  window/flip path is the stronger amplifier): the window build
+  `/root/tilerepro 12 1 1 1 8 30` through the 1.4 swapchain → expect **0** HWR
+  (DDK 1.6 gives 30/30).
+
+Count with `dmesg | grep -c "Hardware Recovery"` around a `dmesg -C`. If either
+ever storms on 1.4, **stop and bisect at that stage** — the port has
+reintroduced the trigger. The reference numbers and the dependency-free repro
+sources (`tools/tilerepro.c`, `tools/tilerepro-pbuffer.c`) are the A/B baseline.
+
 ## Current Status
 
-**Active stage:** **Stage 6 CLOSED (2026-09-10)** — next is Stage 7 (real game).
+**DDK 1.4 reproduction status (2026-09-29).** Stages 0–2 pass on 1.4, and the
+1.4 FLIP hang that blocked the window path is root-caused and fixed; Stages 3–6
+are next.
+
+| Stage | DDK 1.4 status |
+| --- | --- |
+| 0 — stable rendering baseline | **Pass** (pbuffer; 0 HWR where 1.6 gives ~20). |
+| 1 — `dc_nohw` window surface + swap | **Pass** (2026-09-25): FLIPWSEGL window, windowed gate 0 HWR. |
+| 2 — DMA-BUF export | **Pass** (2026-09-25): exporter ported; ABI 2, 3× 1024×600 ARGB8888, readback, no CMA leak, unload guard. |
+| FLIP hang (between 1 and 3) | **Fixed** (2026-09-28): 12-tile FLIP hung ~42 % of sessions on the first frame = missing CPU cache maintenance on new GPU memory; Nokia N9 `inv_cache_mem_area` port → 0/12, then 100/100 soak, 0 HWR ([details](sgx530-12tile-fringe-flip-results.md)). |
+| 3 — KMS import + CPU-pattern scanout | **Next.** Tools are DDK-agnostic (`dc_nohw_kms_present` only uses `/dev/dc_nohw_export` + omapdrm); expected to be a re-run. |
+| 4 — SGX-rendered pixel proof | **Next**: `sgx-window-swap` + in-process present against the 1.4 libs. |
+| 5 — swap-notify + `sgxmode` | **Partial**: the swap-notify implementation came over with the exporter; the `CreateDCSwapChain`/`ProcessFlip` hooks are not wired in 1.4 yet. |
+| 6 — in-kernel `omapdrm_present` | **Not started**: port `dc_nohw_present.c` (6a mailbox, 6b paced + the three 6b fixes) into the 1.4 `dc_nohw`. Required before the image can ship 1.4 (`rootfs/build-devuan.sh` checks `dcnohw.ko` for `omapdrm_present`). |
+
+Sources are now committed and pushed: 1.4 on `users/rgammon/pvrsgx-1.4.14.2616`,
+merged with 1.6 into `users/rgammon/b4-7.2`, which the image kernel build pins
+(see Handoff Card).
+
+**Active stage:** **PIVOT to DDK 1.4 (2026-09-25)** — Stages 0–6 are validated on
+DDK 1.6 (now the reference implementation); the ship target is DDK 1.4, so Stages
+1–6 are being reproduced on the 1.4 stack (Stages 0–2 done, see table above).
+See the **Plan Pivot** section above. Next app-validation target is
+**Slint** (Stage 7, replacing the game).
 **Stage 0 soak re-test PASSED:** 7 load→run→unload cycles (5 paced + 2 mailbox,
 every `rmmod` OK), a 180 s sustained paced run (10,601 swaps, `over_500ms=0`,
 clean exit), memory flat across the whole soak (`CmaFree` 16108→15748), IRQ 37
@@ -79,11 +186,14 @@ validated.
 | DDK `1.6.16.3977`, SGX103  |        0.204 ms |        0.204 ms |           0 of 112 |
 | DDK `1.17.4948957`, SGX121 |         1.46 ms |       808.27 ms |          56 of 112 |
 
-DDK 1.6 is the primary implementation target because it is the newest known TI
-release with a complete SGX103 payload and matches DDK 1.4 performance. DDK 1.4
-remains the rollback baseline. Neither stack has yet passed Stage 1: the pbuffer
-benchmark required `dc_nohw` registration but did not create an EGL window
-surface or exercise a DisplayClass swapchain.
+**DDK `1.4.14.2616` is the ship target** (see the Plan Pivot above): it is the
+stack that shipped on this SGX103 silicon, is storm-free where 1.6 regressed, and
+matches 1.6 performance. **DDK `1.6.16.3977` is retained as the validated
+reference implementation and diagnostic control** — the newest recovered TI
+release with a complete SGX103 payload, and the blueprint for the `dc_nohw`/KMS
+path. Stage 0 passes on both; the Stage 1–8 window-surface/DisplayClass swapchain
+path is validated on 1.6 and is being reproduced on 1.4 (which has so far been
+exercised only through the pbuffer benchmark).
 
 **Resolved since the original baseline (see
 [sgx-ddk16-stall-followups.md](sgx-ddk16-stall-followups.md)):**
@@ -152,6 +262,26 @@ Reviewable baseline commits:
 
 The worktree is clean at the Stage 0 checkpoint. Do not edit generated or
 staged copies as canonical source.
+
+**DDK 1.4 ship-target source (pivot).** The 1.4 stack is brought forward using
+the 1.6 port above as the reference:
+
+- DDK 1.4 worktree: `/mnt/scratch/geoduck-tmp/beagle/openpvrsgx-ddk14`
+- Branch: `users/rgammon/pvrsgx-1.4.14.2616` (pushed to
+  `github.com/rggammon/linux_openpvrsgx`); integration branch
+  `users/rgammon/b4-7.2` merges it with the 1.6 branch and is what
+  `kernel/build-devuan.sh` pins
+- DDK source: `drivers/gpu/drm/pvrsgx/1.4.14.2616` (`dc_nohw` under
+  `services4/3rdparty/dc_nohw`, DDK-1.8-derived, shared lineage with 1.6)
+- Hot-swap modules for the running B4 kernel: `tools/build-graft-14.sh [ref]`
+  → `/mnt/scratch/geoduck-tmp/beagle/pvr14-out/{pvrsrvkm,dcnohw}.ko`
+  (vermagic `7.2.0-g214a35fbc02e-dirty`); on the board as
+  `/root/pvrsrvkm-14-rw.ko` + `/root/dcnohw-14-rw.ko`.
+- On-board soft-float userspace: `/opt/sgx-ddk14/usr/{lib,bin}` (recovered from
+  OpenPandora SuperZaxxon, `1.4.14.2616`). Loading order that works: `rmmod
+dcnohw pvrsrvkm` (1.6) → `insmod` 1.4 `pvrsrvkm.ko` then `dcnohw.ko` (the DC
+  module is required — `eglInitialize` fails without it, even for pbuffer) →
+  `pvrsrvinit` via `/lib/ld-linux.so.3 --library-path /opt/sgx-ddk14/usr/lib`.
 
 ### Target Runtime
 
@@ -360,9 +490,11 @@ legacy procfs diagnostics, or inspect proprietary objects.
 
 ### Game-Representative Coverage
 
-The end goal is a real GLES title (OpenQuartz/GLQuake-class, or a MonoGame 2D
-demo). Those apps exercise paths the FBO/pbuffer probes do not, so add these to
-the Stage 0 smoke before trusting a game run. Each is cheap and isolates one SGX
+The end goal is the appliance UI — **Slint** (its femtovg/nanovg GLES2
+renderer), including the screen-saver soak app tracked separately. A real GLES
+title (OpenQuartz/GLQuake-class) remains an optional secondary target. These
+apps exercise paths the FBO/pbuffer probes do not, so add these to the Stage 0
+smoke before trusting an app run. Each is cheap and isolates one SGX
 subsystem:
 
 - **Depth buffer.** Request a config with a 16- or 24-bit depth buffer and run a
@@ -829,15 +961,17 @@ and packaging stages live in the satellite:
 
 - [Presentation later stages (6–8)](ddk16-presentation-stages-6-8.md) — Stage 6
   in-kernel `omapdrm_present` endgame + generic `vtrun` launcher (**done**),
-  Stage 7 application validation (OpenQuartz/GLQuake, soft-float), Stage 8
-  packaging.
+  Stage 7 application validation (**Slint** appliance UI + screen-saver soak,
+  soft-float), Stage 8 packaging.
 
 The architecture, ownership invariant, buffer-state protocol, and engineering
 rules below apply throughout those stages.
 
 ## Engineering Rules
 
-1. Work in the DDK 1.6 OpenPVRSGX worktree, not generated bundles.
+1. Ship target is the DDK 1.4 worktree (`openpvrsgx-ddk14`), using the completed
+   DDK 1.6 worktree (`openpvrsgx-ddk16`) as the validated reference; work in the
+   worktrees, not generated bundles.
 2. Keep SGX103-only configuration and version matching strict.
 3. Make each stage a separate reviewable patch series. Checkpoint proven
    behavior before adding the next stage, and never mix temporary diagnostics
@@ -857,17 +991,24 @@ rules below apply throughout those stages.
 
 ## Immediate Next Actions
 
-1. **Stage 6 complete (2026-09-10).** In-kernel `omapdrm_present` validated as
-   Phase 6a (mailbox) and Phase 6b (paced, ghost-free), the Stage 0 soak re-test
-   passed (7 load/unload cycles + a 180 s paced run, memory flat, IRQ 37 rising,
-   zero crash/recovery), and the game-representative GLES coverage (texture
-   upload+sampling, indexed draws, blending) runs clean via the paced path.
-2. **Stage 7:** bring up a real soft-float game (OpenQuartz/GLQuake) through the
-   `present=2` path — compile the game soft-float from source, wire its EGL/GLES
-   entry point to the `dc_nohw` window surface, and validate a sustained run.
-3. **Stage 8 hardening:** give the present path (or `vtrun`) its own `SETCRTC`/
+1. **Stage 6 complete (2026-09-10) on DDK 1.6 — now the reference.** In-kernel
+   `omapdrm_present` validated as Phase 6a (mailbox) and Phase 6b (paced,
+   ghost-free), the Stage 0 soak re-test passed (7 load/unload cycles + a 180 s
+   paced run, memory flat, IRQ 37 rising, zero crash/recovery), and the
+   app-representative GLES coverage (texture upload+sampling, indexed draws,
+   blending) runs clean via the paced path.
+2. **Pivot re-validation (new priority): reproduce Stages 1–6 on DDK 1.4.**
+   Stages 0–2 pass on 1.4 and the FLIP hang is fixed (see Current Status). Next:
+   Stage 3–4 re-runs (DDK-agnostic tools), wire the swap-notify hooks (Stage 5),
+   then port `dc_nohw_present.c` into the 1.4 `dc_nohw` (Stage 6a mailbox, then
+   6b paced with the three 6b fixes). The `omapdrm` export is stack-agnostic.
+3. **Stage 7:** bring up the appliance UI — **Slint** (femtovg/nanovg,
+   soft-float) and the screen-saver soak app — through the `present=2` path on
+   the 1.4 stack, and validate a sustained run.
+4. **Stage 8 hardening:** give the present path (or `vtrun`) its own `SETCRTC`/
    modeset so a bad panel boot mode cannot corrupt output; add the
-   `console-unbind` ship path and the generic `vtrun` launcher.
+   `console-unbind` ship path and the generic `vtrun` launcher; ship the DDK 1.4
+   runtime with DDK 1.6 kept staged as the diagnostic reference.
 
 ## Explicit Non-Goals
 
