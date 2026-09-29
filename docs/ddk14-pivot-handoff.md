@@ -231,17 +231,37 @@ libsrv_um .1.4.14.2616`). Results: windowed gate `12 1 1 1 8 30` = **0 HWR on
    (20 cycles flat); unload guard works (`dma_buf` owner pins the module).
    **CMA exonerated**: clean-boot A/B DISCONTIG 0,1,1 vs CONTIG 0,1,1 — identical
    (an earlier "CONTIG 9× worse" was an accumulation confound on a dirty board).
-3. **Stage 3–4 — PRIME import + `SETCRTC`**: one 1.4-rendered frame on the panel
-   via `dc_nohw → PRIME → omapdrm`. **← START HERE (2026-09-29).** The FLIP
-   hang that blocked this is fixed (Nokia cache commit, 100/100 soak). Tools are
-   DDK-agnostic: `dc_nohw_kms_present` (`raw` mode) for Stage 3, then
-   `sgx-window-swap` with `SGX_PRESENT` against `/opt/sgx-ddk14` for Stage 4.
-4. **Stage 5 — `sgxmode` presenter + `dc_nohw` swap-notify** on 1.4. The ABI-v2
-   swap-notify implementation (`DCNohwNotifySwap`/`DCNohwNotifySwapchain`) is
-   already in the 1.4 `dc_nohw_export.c`; only the calls from
-   `CreateDCSwapChain`/`DestroyDCSwapChain`/`ProcessFlip` in
-   `dc_nohw_displayclass.c` are missing (copy the 1.6 hook sites).
-5. **Stage 6 — in-kernel `omapdrm_present`** (6a mailbox, 6b paced). **Porting
+3. **Stage 3–4 — PRIME import + `SETCRTC`. ✅ PASS (2026-09-29).** One
+   1.4-rendered frame on the panel via `dc_nohw → PRIME → omapdrm`. The 1.4
+   `dc_nohw` dma-buf (branch-head `dcnohw-14-rw.ko`, CONTIG CMA export)
+   PRIME-imports into `omapdrm` (`gem=1`), `ADDFB2` accepts it (`fb_id=63`), and
+   `SETCRTC` scans it out on connector 57 / crtc 58 @ 1024×600. Validated with
+   `tools/dc_nohw_kms_present` (hard-float, cross-built on geoduck): `import`
+   mode (CPU colour bars) **and** `raw` mode (untouched 1.4-SGX render —
+   `tilerepro` 12-tile scene) both scan out clean, dmesg clean, user-confirmed
+   on the BTT-HDMI7 panel. Regression gate clean on 1.4 (pbuffer 24t/150f = 0
+   HWR, windowed 3×30f = 0/0/0). The FLIP hang that blocked this is fixed (Nokia
+   cache commit). (`sgx-window-swap` + `SGX_PRESENT` — the single-process 4b
+   variant — is optional; the two-process render-then-present path above is
+   sufficient proof.)
+4. **Stage 5 — `sgxmode` presenter + `dc_nohw` swap-notify. ✅ PASS
+   (2026-09-29).** Wired the swap-notify calls into the 1.4
+   `dc_nohw_displayclass.c` hook sites, copying the 1.6 blueprint
+   (`DCNohwNotifySwapchain(1, count)` in `CreateDCSwapChain`,
+   `DCNohwNotifySwapchain(0, 0)` in `DestroyDCSwapChain`, the `DCNohwBufferIndex`
+   helper + `DCNohwNotifySwap(index)` in `ProcessFlip` — **swap-notify only, no
+   Stage 6 `present=` path**). Committed to the 1.4 branch as `08085605c`, built
+   with `tools/build-graft-14.sh`. Validated with `tools/dc_nohw_notify_dump`
+   (built native on-board with `cc`): an unmodified `tilerepro` drives 30 swaps →
+   `SWAPCHAIN_CREATE count=3`, 30 `SWAP` events (rotating index 1/2/0, seq 1–30),
+   `SWAPCHAIN_DESTROY`, 0 HWR. Then `tools/sgxmode` (hard-float, cross-built on
+   geoduck) forked the unmodified app and page-flipped each swap-notified buffer
+   — animated tiles on the BTT-HDMI7 panel (user-confirmed; expected 5a mailbox
+   ghost), clean teardown (refcount 0, 0 HWR, no oops). Regression gate clean
+   (pbuffer 24t/150f = 0, windowed 3×30f = 0/0/0). Board module:
+   `/root/dcnohw-14-notify.ko` (branch head + hooks).
+5. **Stage 6 — in-kernel `omapdrm_present`** (6a mailbox, 6b paced). **← START
+   HERE (next).** **Porting
    note:** the 1.4 `dc_nohw` has no `dc_nohw_present.c` (confirmed on the
    branch); the Stage 6
    `present=` path (`dc_nohw_present.c`, blocking-commit + `DCNohwCompleteFlip`,
