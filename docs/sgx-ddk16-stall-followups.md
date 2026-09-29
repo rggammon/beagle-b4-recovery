@@ -3,20 +3,19 @@
 Candidates found while the IRQ-fix build ran (2026-09-06). The **confirmed root cause**
 was the SGX interrupt mapping — DDK requested raw IRQ 21 (= virq 21 = hwirq 5, wrong line),
 so the completion interrupt never fired (`/proc/interrupts`: `21: 0 INTC 5 Edge SGX ISR`,
-count stuck at 0) and every `PVRSRVEventObjectWait` timed out. Fixed by
-[kernel/patches-devuan/0008-pvrsgx-sgx-irq-37.patch](../kernel/patches-devuan/0008-pvrsgx-sgx-irq-37.patch)
-(21 → 37). The clock patches (`0005`/`0007`) were red herrings — the DDK module self-sets
+count stuck at 0) and every `PVRSRVEventObjectWait` timed out. Fixed by requesting virq 37
+(originally patch `0008`; now fork commit `cd0c1ddc7`, which maps the IRQ from the device
+tree). The clock patches (`0005`/`0007`) were red herrings — the DDK module self-sets
 `sgx_fck` to 110.67 MHz on load.
 
 ## Status (2026-09-06)
 
-- **Residual `EVENT_OBJECT_WAIT` stall: RESOLVED** by
-  [0008-pvrsgx-sgx-irq-37.patch](../kernel/patches-devuan/0008-pvrsgx-sgx-irq-37.patch).
+- **Residual `EVENT_OBJECT_WAIT` stall: RESOLVED** by the IRQ fix above.
   Verified on hardware: `37: … INTC 21 SGX ISR` fires every frame; 500-frame serialized soak
   clean at ~30 ms/frame (native parity), zero timeout flood.
-- **`PVRSRV_ERROR_UNABLE_TO_LOCK_RESOURCE(104)` under long soak: RESOLVED** by
-  [0009-pvrsgx-apm-latency-500ms.patch](../kernel/patches-devuan/0009-pvrsgx-apm-latency-500ms.patch)
-  (item #1 below).
+- **`PVRSRV_ERROR_UNABLE_TO_LOCK_RESOURCE(104)` under long soak: RESOLVED** by raising the
+  active-power latency (item #1 below; originally patch `0009` at 500 ms, now fork commit
+  `45199fc9c` at 100 ms, re-validated 2026-09-29 with the 2000-frame `-ser 1` soak).
 - The clock patches were confirmed inert red herrings and have been **removed** from the tree.
 - Remaining items (#2–#6) assessed below: **#3, #4, #6 verified/closed on hardware; #2 and #5 have no
   measured symptom.** None is worth pursuing proactively — #2/#5 carry a concrete "reconsider if" trigger.
@@ -46,8 +45,8 @@ Under a long soak one transition eventually stalls >1 s, so a concurrent render 
 out and returns **`PVRSRV_ERROR_UNABLE_TO_LOCK_RESOURCE(104)`** (seen at ~frame 1500 of a
 2000-frame `-ser 1` soak; not OOM, dmesg clean).
 
-**Fix:** [0009-pvrsgx-apm-latency-500ms.patch](../kernel/patches-devuan/0009-pvrsgx-apm-latency-500ms.patch)
-raises the idle latency to 500 ms. Frames are ~30 ms apart, so the SGX stays powered through active
+**Fix:** raise the idle latency (originally patch `0009` at 500 ms; now fork commit
+`45199fc9c` at 100 ms, the value the other DDKs in the fork use). Frames are ~30 ms apart, so the SGX stays powered through active
 rendering (no per-frame cycling) and only powers down on genuine idle.
 
 **Optional further hardening (not currently needed):** the DT wraps SGX in a `ti,sysc` target-module
