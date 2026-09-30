@@ -260,15 +260,27 @@ libsrv_um .1.4.14.2616`). Results: windowed gate `12 1 1 1 8 30` = **0 HWR on
    ghost), clean teardown (refcount 0, 0 HWR, no oops). Regression gate clean
    (pbuffer 24t/150f = 0, windowed 3×30f = 0/0/0). Board module:
    `/root/dcnohw-14-notify.ko` (branch head + hooks).
-5. **Stage 6 — in-kernel `omapdrm_present`** (6a mailbox, 6b paced). **← START
-   HERE (next).** **Porting
-   note:** the 1.4 `dc_nohw` has no `dc_nohw_present.c` (confirmed on the
-   branch); the Stage 6
-   `present=` path (`dc_nohw_present.c`, blocking-commit + `DCNohwCompleteFlip`,
-   `pfnPVRSRVCmdComplete(..., IMG_TRUE)`) must be ported into the 1.4 `dc_nohw`
-   source and rebuilt against `omapdrm`'s `Module.symvers`. The three 6b bugs are
-   documented in the stages-6-8 doc (fb refcount cycle, completion off-by-one,
-   `IMG_FALSE` hash corruption) — reuse those fixes.
+5. **Stage 6 — in-kernel `omapdrm_present`** (6a mailbox, 6b paced). **RENDER
+   PASS, 6b TEARDOWN BLOCKED (2026-09-29).** Ported `dc_nohw_present.c` verbatim
+   from 1.6 + wired it in (param `present` 0/1/2, `DCNohwPresentInit/Flip/Flush/
+Teardown`, `DCNohwCompleteFlip` with `IMG_TRUE`); committed `15f02fd554af`
+   (pushed). No omapdrm rebuild needed — the shipped kernel's `omapdrm.ko`
+   already exports `omapdrm_present`/`import_dmabuf`/`release_fb` and the kernel
+   `Module.symvers` has the CRCs, so the `M=` build resolves them. Board module
+   `/root/dcnohw-14-present.ko`. **6a (`present=1` mailbox) and 6b (`present=2`
+   paced) both RENDER correctly on the panel** (user-confirmed: 6a ghost, 6b
+   ghost-free), 0 HWR during render. **← START HERE (next):** **6b clean-exit
+   teardown PANICS** the board — `In-band Error seen by SGX at address 0` →
+   `omap3_l3_app_irq` → Oops in IRQ → kernel panic. Root cause: `present=2`
+   defers completion through the MISR/queue, which races `DestroyDCSwapChain`
+   freeing the swapchain buffer → SGX touches freed memory. This is the 1.4
+   **queue-teardown UAF that 1.6 fixes with patches 0010 (contain pending
+   swapchain teardown) + 0016 (reconcile stranded syncs)** — 1.4 pvrsrvkm has
+   neither. **Fix = port the 0010/0016-equivalent into 1.4 pvrsrvkm** before 6b
+   paced is safe. 6a mailbox completes inline (no deferred MISR completion) and
+   tore down cleanly — it's the safe interim path. (The three original 6b dc_nohw
+   fixes — fb refcount cycle, completion off-by-one, `IMG_FALSE` hash corruption
+   — are already in the ported `dc_nohw_present.c`.)
 6. **Stage 7 — Slint + screen-saver soak** through the 1.4 `present=2` path,
    soft-float. Prefer the batched/uber-shader render path (nanovg-style single
    program, or Slint `cache-rendering-hint`) — belt-and-braces even though 1.4
