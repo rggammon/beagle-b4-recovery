@@ -260,28 +260,43 @@ libsrv_um .1.4.14.2616`). Results: windowed gate `12 1 1 1 8 30` = **0 HWR on
    ghost), clean teardown (refcount 0, 0 HWR, no oops). Regression gate clean
    (pbuffer 24t/150f = 0, windowed 3×30f = 0/0/0). Board module:
    `/root/dcnohw-14-notify.ko` (branch head + hooks).
-5. **Stage 6 — in-kernel `omapdrm_present`** (6a mailbox, 6b paced). **RENDER
-   PASS, 6b TEARDOWN BLOCKED (2026-09-29).** Ported `dc_nohw_present.c` verbatim
+5. **Stage 6 — in-kernel `omapdrm_present`** (6a mailbox, 6b paced). **PASS
+   (2026-09-30).** Ported `dc_nohw_present.c` verbatim
    from 1.6 + wired it in (param `present` 0/1/2, `DCNohwPresentInit/Flip/Flush/
-Teardown`, `DCNohwCompleteFlip` with `IMG_TRUE`); committed `15f02fd554af`
-   (pushed). No omapdrm rebuild needed — the shipped kernel's `omapdrm.ko`
+Teardown`, `DCNohwCompleteFlip` with `IMG_TRUE`); committed `15f02fd554af`.
+   No omapdrm rebuild needed — the shipped kernel's `omapdrm.ko`
    already exports `omapdrm_present`/`import_dmabuf`/`release_fb` and the kernel
-   `Module.symvers` has the CRCs, so the `M=` build resolves them. Board module
-   `/root/dcnohw-14-present.ko`. **6a (`present=1` mailbox) and 6b (`present=2`
-   paced) both RENDER correctly on the panel** (user-confirmed: 6a ghost, 6b
-   ghost-free), 0 HWR during render. **← START HERE (next):** **6b clean-exit
-   teardown PANICS** the board — `In-band Error seen by SGX at address 0` →
-   `omap3_l3_app_irq` → Oops in IRQ → kernel panic. Root cause: `present=2`
-   defers completion through the MISR/queue, which races `DestroyDCSwapChain`
-   freeing the swapchain buffer → SGX touches freed memory. This is the 1.4
-   **queue-teardown UAF that 1.6 fixes with patches 0010 (contain pending
-   swapchain teardown) + 0016 (reconcile stranded syncs)** — 1.4 pvrsrvkm has
-   neither. **Fix = port the 0010/0016-equivalent into 1.4 pvrsrvkm** before 6b
-   paced is safe. 6a mailbox completes inline (no deferred MISR completion) and
-   tore down cleanly — it's the safe interim path. (The three original 6b dc_nohw
-   fixes — fb refcount cycle, completion off-by-one, `IMG_FALSE` hash corruption
-   — are already in the ported `dc_nohw_present.c`.)
-6. **Stage 7 — Slint + screen-saver soak** through the 1.4 `present=2` path,
+   `Module.symvers` has the CRCs, so the `M=` build resolves them. **6a
+   (`present=1` mailbox) and 6b (`present=2` paced) both RENDER correctly on the
+   panel** (user-confirmed: 6a ghost, 6b ghost-free).
+
+   **6b teardown panic — root cause and fix.** `present=2` clean exit panicked
+   (`In-band Error seen by SGX at address 0` → `omap3_l3_app_irq` → panic in
+   IRQ). A serial trace with RESMAN/`SGXCleanupRequest` printks showed it is
+   *not* the 1.6 0010 freed-sync UAF: the render-context cleanup
+   (`SGXCleanupRequest`) **timed out at 500 ms**, its late `COMPLETE` was then
+   credited to the next (transfer-context) request, the host proceeded while
+   the ukernel was still cleaning up, and SGX faulted. Cause: 1.4's teardown
+   waits (`PollForValueKM` in `SGXCleanupRequest`, and the
+   `PVRSRVDestroyCommandQueueKM` drain loop) are `udelay` busy-waits. On the
+   single-core `PREEMPT_VOLUNTARY` OMAP3 they starve the MISR and the dc_nohw
+   present worker, but the ukernel cannot finish the cleanup until the worker
+   completes the flip that releases the buffer a pending render is waiting on —
+   a circular wait. The same starvation made swapchain queue destruction fail
+   with `CANNOT_FLUSH` (leak). `present=1` never hit it because its flips
+   complete inline. Fix: `OSSleepus`/`PollForValueSleepKM` in both
+   process-context waits, plus a stale-completion guard in `SGXCleanupRequest`
+   (commit `44ead6a7598f`, on top of `e9eead3b1259` = ported 0010
+   fail-closed + 214a35 reclaim, kept as a safety net). Branch pushed.
+   Validated: 100-iteration soak (`present=2`, 60f clean exits + 600f every
+   10th) = 100/100 rc=0, dcnohw refcount 0 every run (no leak), 0 HWR, 0
+   cleanup timeouts (max 180 ms), MemAvailable stable; gate clean (pbuffer
+   24t/150f = 0, windowed 3×30f = 0/0/0); `rmmod` clean. Board modules
+   `/root/pvrsrvkm-14-stage6.ko` + `/root/dcnohw-14-stage6.ko`; soak script
+   `/root/soak-6b.sh`. **Still open:** port 0016 (reconcile stranded flip syncs
+   at HWR — orthogonal reset bug); killed-client (SIGKILL mid-run) teardown not
+   yet soaked.
+6. **Stage 7 — Slint + screen-saver soak** ← START HERE. Through the 1.4 `present=2` path,
    soft-float. Prefer the batched/uber-shader render path (nanovg-style single
    program, or Slint `cache-rendering-hint`) — belt-and-braces even though 1.4
    does not storm on fringe×churn.
