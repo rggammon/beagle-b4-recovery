@@ -298,8 +298,10 @@ Teardown`, `DCNohwCompleteFlip` with `IMG_TRUE`); committed `15f02fd554af`.
    `WriteOpsComplete` after `HWRecoveryResetSGX`, so a flip queued on a render
    the reset discarded drains instead of wedging the client. Gate clean + 50/50
    `present=2` soak; the reconcile path itself has not fired yet (no HWR with a
-   pending flip in testing). Board `-stage6.ko` modules include it. **Still
-   open:** killed-client (SIGKILL mid-run) teardown not yet soaked.
+   pending flip in testing). Board `-stage6.ko` modules include it.
+   Killed-client soak (`/root/soak-kill.sh`, SIGKILL after 1–5 s of a `present=2`
+   run, then a clean 30f follow-up): 40/40 clean — follow-up runs all succeed,
+   refcount 0, 0 HWR/timeouts/faults, 0 `preserving swapchain`.
 6. **Stage 7 — Slint + screen-saver soak** ← START HERE. Through the 1.4 `present=2` path,
    soft-float. Prefer the batched/uber-shader render path (nanovg-style single
    program, or Slint `cache-rendering-hint`) — belt-and-braces even though 1.4

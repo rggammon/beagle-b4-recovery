@@ -97,6 +97,35 @@ Hard-won notes worth remembering for this board and this class of work.
   initialization on the `!RQF_DONTPREP` path; do not disable single-block recovery for
   an actual failed request.
 
+## PowerVR SGX (DDK 1.4) on a single-core kernel
+
+- **Don't busy-wait for work another thread must finish.** DDK 1.4's teardown waits
+  (`PollForValueKM` in `SGXCleanupRequest`, the `PVRSRVDestroyCommandQueueKM` drain loop)
+  are `udelay` loops. The OMAP3530 has one core and the kernel is
+  `CONFIG_PREEMPT_VOLUNTARY`, where kernel code is only rescheduled where it sleeps or
+  hits a `cond_resched()`/`might_sleep()` point — `udelay` has none. So while teardown
+  spins, no workqueue runs (the services MISR, the dc_nohw present worker); only IRQs do.
+- That caused a circular wait at process exit with the in-kernel paced present
+  (`present=2`): the GPU firmware could not finish the render-context cleanup until the
+  present worker completed a flip (releasing the buffer a queued render waited on), and
+  the worker could not run until the wait ended. The 500 ms poll timed out, 1.4 carried
+  on anyway, the late `COMPLETE` was credited to the *next* cleanup request, and SGX
+  faulted (`In-band Error seen by SGX at address 0` → panic in IRQ). The same starvation
+  made swapchain queue teardown fail with `CANNOT_FLUSH` (a leak). Switching both
+  process-context waits to `usleep_range` fixed the panic and the leak (cleanups now
+  30–310 ms; 100-run soak clean).
+- A busy-wait is only safe if what it waits for is driven by hardware or an interrupt,
+  or the kernel is SMP / fully preemptible. Check what actually completes the condition.
+- **Decode panic registers before theorizing.** Modules load page-aligned, so the low 12
+  bits of a module return address are stable across boots: matching `lr & 0xfff` against
+  the delay call sites in `objdump -d` pinpointed `PollForValueKM`, and its saved
+  arguments (value/mask `0x80`) identified the exact poll. The first theory (a freed sync
+  object, borrowed from a 1.6 patch) was wrong.
+- **`sync` after copying files to the board before a test that may panic.** Unsynced
+  files came back zero-filled after the power-cycle (`Invalid ELF header magic`).
+- Only the serial console survives an IRQ-context panic: `dmesg -n 7` plus `KERN_ERR`
+  printks at the suspect waits gave the ordering that dmesg/ssh never could.
+
 ## GitHub Actions / repo hygiene
 
 - **Commit shell scripts with the exec bit set**, or the Linux runner fails with
