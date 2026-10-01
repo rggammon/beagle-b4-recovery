@@ -293,9 +293,13 @@ Teardown`, `DCNohwCompleteFlip` with `IMG_TRUE`); committed `15f02fd554af`.
    cleanup timeouts (max 180 ms), MemAvailable stable; gate clean (pbuffer
    24t/150f = 0, windowed 3×30f = 0/0/0); `rmmod` clean. Board modules
    `/root/pvrsrvkm-14-stage6.ko` + `/root/dcnohw-14-stage6.ko`; soak script
-   `/root/soak-6b.sh`. **Still open:** port 0016 (reconcile stranded flip syncs
-   at HWR — orthogonal reset bug); killed-client (SIGKILL mid-run) teardown not
-   yet soaked.
+   `/root/soak-6b.sh`. **0016 ported** (2026-09-30, `1b5bb0a54c97`, pushed):
+   `PVRSRVReconcileStrandedSyncsKM` advances abandoned source-sync
+   `WriteOpsComplete` after `HWRecoveryResetSGX`, so a flip queued on a render
+   the reset discarded drains instead of wedging the client. Gate clean + 50/50
+   `present=2` soak; the reconcile path itself has not fired yet (no HWR with a
+   pending flip in testing). Board `-stage6.ko` modules include it. **Still
+   open:** killed-client (SIGKILL mid-run) teardown not yet soaked.
 6. **Stage 7 — Slint + screen-saver soak** ← START HERE. Through the 1.4 `present=2` path,
    soft-float. Prefer the batched/uber-shader render path (nanovg-style single
    program, or Slint `cache-rendering-hint`) — belt-and-braces even though 1.4
