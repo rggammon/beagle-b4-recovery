@@ -334,10 +334,14 @@ Teardown`, `DCNohwCompleteFlip` with `IMG_TRUE`); committed `15f02fd554af`.
      the cache nests a second target inside it (`tools/gl-fbo-trace.c`): layer A
      cleared → cache target B created and drawn → back to A to sample B. No GL
      errors or incomplete FBOs; `glFinish` at switches and NULL texture data
-     don't help. `tools/fbo-reentry-test.c` reproduces femtovg's order
-     (create B while A has a pending clear): 1.6 passes, **1.4 hangs the client
-     in `LinuxEventObjectWait`** (no HWR). Bug is in DDK 1.4 (closed userspace
-     GLES). Interim: run with `SLINT_CACHE=0` on 1.4.
+     don't help. `tools/fbo-reentry-test.c` reproduces femtovg's nested order
+     (cases 1–10, incl. creating B while A has a pending clear): **all PASS on
+     B4 1.4, B4 1.6 and the Pandora (1.4.14.2616 libs)** — so the minimal pattern
+     does NOT reproduce the tile loss. (An earlier "case 10 hangs 1.4" reading was
+     wrong: output was pipe-buffered; the hang is in the test's EGL teardown —
+     `LinuxEventObjectWait` after `RESULT` — on both B4 1.4 and the Pandora.) The
+     trigger is still something else in femtovg's stream (NPOT 150×96 targets,
+     stencil/scissor/blend state, …). Interim: run with `SLINT_CACHE=0` on 1.4.
    - **Don't `rmmod dcnohw` while any client may still hold a display device:**
      dcnohw takes no module reference on open, so pvrsrvkm's
      `CloseDCDeviceCallBack` jumped into the unloaded module and oopsed (needed a

@@ -146,20 +146,27 @@ int main(void)
     GLuint fa, ta, fb, tb, vs, fs;
     int pass = 1;
 
-    if (!eglInitialize(dpy, NULL, NULL) || !eglChooseConfig(dpy, cfga, &cfg, 1, &n) || n < 1) {
-        fprintf(stderr, "FAIL: egl init/config\n");
+    if (!eglInitialize(dpy, NULL, NULL)) {
+        fprintf(stderr, "FAIL: egl init\n");
         return 1;
     }
+    setvbuf(stdout, NULL, _IONBF, 0);
     eglBindAPI(EGL_OPENGL_ES_API);
-    /* FBO_WINDOW=1: render to the dc_nohw window surface instead of a pbuffer */
+    /* FBO_WINDOW=1: render to the display's window surface instead of a pbuffer */
     const char *fw = getenv("FBO_WINDOW");
     const int window = fw && fw[0] == '1';
     const EGLint cfgw[] = {
         EGL_SURFACE_TYPE, EGL_WINDOW_BIT, EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
         EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8, EGL_NONE
     };
-    if (window && (!eglChooseConfig(dpy, cfgw, &cfg, 1, &n) || n < 1)) {
-        fprintf(stderr, "FAIL: window config\n");
+    /* any ES2 config for the surface type: the Pandora display is 16-bit */
+    const EGLint cfg_any[] = {
+        EGL_SURFACE_TYPE, window ? EGL_WINDOW_BIT : EGL_PBUFFER_BIT,
+        EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT, EGL_NONE
+    };
+    if ((!eglChooseConfig(dpy, window ? cfgw : cfga, &cfg, 1, &n) || n < 1) &&
+        (!eglChooseConfig(dpy, cfg_any, &cfg, 1, &n) || n < 1)) {
+        fprintf(stderr, "FAIL: no ES2 %s config\n", window ? "window" : "pbuffer");
         return 1;
     }
     EGLSurface surf = window ? eglCreateWindowSurface(dpy, cfg, (EGLNativeWindowType)0, NULL)
@@ -294,6 +301,7 @@ int main(void)
 
     /* 10: femtovg's exact order - B is created (ending in a bind of 0) while
      * A has a pending clear, then B is drawn and sampled back into A */
+    printf("running case 10...\n");
     make_target(&fa, &ta);
     glBindFramebuffer(GL_FRAMEBUFFER, fa);
     clear(1, 0, 0);
@@ -310,6 +318,7 @@ int main(void)
     pass &= check("10 (A itself)", fa, 0xffff00, 0xff0000);
 
     printf("RESULT: %s\n", pass ? "PASS" : "FAIL");
+    printf("egl teardown...\n");
     eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
     eglDestroySurface(dpy, surf);
     eglDestroyContext(dpy, ctx);
