@@ -38,9 +38,9 @@ soft-float runtime for this silicon. Full evidence in
 > **Update (2026‑09‑28): the 1.6 offscreen failure reproduces off B4, so 1.4 remains the
 > direction.** Offscreen pbuffer `24 1 1 1 12 150`:
 >
-> | Platform / stack                                                                                         | 1.6.16.3977                                                                                                                   | 1.4 (same board)       |
-> | -------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- | ---------------------- |
-> | **B4**, kernel 7.2, our 1.6 KM port                                                                      | 20 HWR/run; **`BIF_INT_STAT=0`, `BIF_FAULT=0` on all 20** (no page fault; the page‑table walk found nothing to walk)          | 0 HWR                  |
+> | Platform / stack                                                                                                  | 1.6.16.3977                                                                                                                       | 1.4 (same board)       |
+> | ----------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- | ---------------------- |
+> | **B4**, kernel 7.2, our 1.6 KM port                                                                               | 20 HWR/run; **`BIF_INT_STAT=0`, `BIF_FAULT=0` on all 20** (no page fault; the page‑table walk found nothing to walk)              | 0 HWR                  |
 > | **Pandora**, SuperZaxxon kernel 3.2.84, its own 1.6.16.3977 KM + **unmodified** TI SDK 4.03.00.02 `gfx_rel_es2.x` | **6/6 failed** (none finished 150 frames in 120 s; 0–2 HWR each; page faults `BIF_INT_STAT=0x4002` at `0x0F0AB000`, `0x08811000`) | 3/3 clean (default KM) |
 >
 > Two boards, two kernels, two independently built 1.6 KMs, and unmodified TI userspace all
@@ -182,6 +182,7 @@ on a single clock (`dmesg -C` + `/dev/kmsg` phase markers), never printk-time vs
   submit a TA kick, not necessarily the one that hung. If the power lock was busy, the
   driver logs `power lock busy (...), recovery deferred to next timer tick` and retries
   50 ms later (stock TI silently skipped the recovery).
+
 - **Never reboot mid-HWR** (wedges the kernel hard); reboot before the next
   storming test, not after.
 
@@ -273,7 +274,7 @@ Teardown`, `DCNohwCompleteFlip` with `IMG_TRUE`); committed `15f02fd554af`.
    **6b teardown panic — root cause and fix.** `present=2` clean exit panicked
    (`In-band Error seen by SGX at address 0` → `omap3_l3_app_irq` → panic in
    IRQ). A serial trace with RESMAN/`SGXCleanupRequest` printks showed it is
-   *not* the 1.6 0010 freed-sync UAF: the render-context cleanup
+   _not_ the 1.6 0010 freed-sync UAF: the render-context cleanup
    (`SGXCleanupRequest`) **timed out at 500 ms**, its late `COMPLETE` was then
    credited to the next (transfer-context) request, the host proceeded while
    the ukernel was still cleaning up, and SGX faulted. Cause: 1.4's teardown
@@ -302,11 +303,32 @@ Teardown`, `DCNohwCompleteFlip` with `IMG_TRUE`); committed `15f02fd554af`.
    Killed-client soak (`/root/soak-kill.sh`, SIGKILL after 1–5 s of a `present=2`
    run, then a clean 30f follow-up): 40/40 clean — follow-up runs all succeed,
    refcount 0, 0 HWR/timeouts/faults, 0 `preserving swapchain`.
-6. **Stage 7 — Slint + screen-saver soak** ← START HERE. Through the 1.4 `present=2` path,
-   soft-float. Prefer the batched/uber-shader render path (nanovg-style single
-   program, or Slint `cache-rendering-hint`) — belt-and-braces even though 1.4
-   does not storm on fringe×churn.
-7. **Stage 8 — package**: ship the DDK 1.4 runtime, keep 1.6 staged as the
+
+6. **Stage 7 — Slint + screen-saver soak.** **SOAK PASS (2026-10-01).** The
+   unmodified hard-float Slint screensaver (`/root/screensaver`, femtovg,
+   `cache-rendering-hint` on, transform-only animation) runs on 1.4 through the
+   **1.4 hard-float shim** and `present=2`:
+   - **1.4 HF shim**: `lib/` = the 1.6 shim's DDK-agnostic veneers + `libsgxhf`
+     + `libSGXm`, reused as-is; `ddk/` = the board's `/opt/sgx-ddk14/usr/lib`
+     `.so`s (dereferenced — they're symlinks) run through the same patch steps
+     as `tools/build-hf-shim.sh` (libm→libSGXm, rpath `$ORIGIN`, libSGXm-first).
+     Board: `/opt/sgx-ddk14-hf` + `sgx-ddk14-hf-run`; `hf-shim-selftest` PASS.
+   - **DDK 1.4 lacks `GL_OES_vertex_array_object`** (no entry points, not in the
+     extension string; 1.6 has it). femtovg 0.27 always creates/binds one VAO via
+     glow, which panics (`glGenVertexArraysOES ... not loaded`). Fix without
+     touching the app: `tools/gles-oes-vao-stub.c` → `libsgxvao.so`, LD_PRELOADed;
+     the shim's `eglGetProcAddress` tries `dlsym(RTLD_DEFAULT)` first. No-op VAOs
+     are equivalent for femtovg (it re-specifies all attributes after binding).
+   - Run: `LD_PRELOAD=/opt/sgx-ddk14-hf/lib/libsgxvao.so
+     LD_LIBRARY_PATH=/root/slint-libs SGXMODE_PARK=1 /root/sgxmode --
+     sgx-ddk14-hf-run /root/screensaver` (soak script `/root/soak-slint.sh`).
+   - **35-min soak**: 77,757 frames, **37.0 fps** steady (36.5–37.1 per-minute),
+     0 HWR, 0 cleanup timeouts/faults, clean exit, dcnohw refcount 0, app RSS
+     flat at 24.1 MB, MemAvailable flat at ~44 MB.
+   - **Not yet covered** by the pass criteria: input (the screensaver has none)
+     and restart-under-load; the HF-14 shim + VAO stub are hand-built, not yet
+     in `sgx-ddk16/Makefile hf-shim-14` / packaging.
+7. **Stage 8 — package** ← START HERE: ship the DDK 1.4 runtime, keep 1.6 staged as the
    diagnostic reference; give the present path its own `SETCRTC`/modeset; add
    `vtrun` + `console-unbind`.
 
