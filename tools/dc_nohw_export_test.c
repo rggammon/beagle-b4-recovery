@@ -91,12 +91,28 @@ int main(int argc, char **argv)
         checksum += px[i];
 
     uint32_t pixel0 = px[0];
-    printf("pixel[0]=0x%08x pixel[mid]=0x%08x checksum=0x%08x\n",
-           pixel0, px[words / 2], checksum);
+    unsigned long lit = 0;
+    for (i = 0; i < words; i += 16) {
+        uint32_t p = px[i];
+        unsigned r = (p >> 16) & 0xff, g = (p >> 8) & 0xff, b = p & 0xff;
+        if (r > 80 || g > 80 || b > 80)
+            lit++;
+    }
+    printf("pixel[0]=0x%08x pixel[mid]=0x%08x checksum=0x%08x lit=%lu\n",
+           pixel0, px[words / 2], checksum, lit);
     printf("first16bytes=");
     for (i = 0; i < 16; i++)
         printf("%02x", ((unsigned char *)map)[i]);
     printf("\n");
+
+    /* DC_DUMP=<path>: write the raw buffer (stride x height ARGB8888) to a file. */
+    if (getenv("DC_DUMP") != NULL) {
+        FILE *f = fopen(getenv("DC_DUMP"), "wb");
+        if (!f) { perror(getenv("DC_DUMP")); return 1; }
+        fwrite(map, 1, abi.buffer_size, f);
+        fclose(f);
+        printf("dumped %u bytes to %s\n", abi.buffer_size, getenv("DC_DUMP"));
+    }
 
     /* DC_HOLD=<secs>: keep the mmap + dmabuf fd open (tests the unload guard). */
     if (getenv("DC_HOLD") != NULL) {

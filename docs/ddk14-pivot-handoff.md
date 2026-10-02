@@ -304,7 +304,8 @@ Teardown`, `DCNohwCompleteFlip` with `IMG_TRUE`); committed `15f02fd554af`.
    run, then a clean 30f follow-up): 40/40 clean — follow-up runs all succeed,
    refcount 0, 0 HWR/timeouts/faults, 0 `preserving swapchain`.
 
-6. **Stage 7 — Slint + screen-saver soak.** **SOAK PASS (2026-10-01).** The
+6. **Stage 7 — Slint + screen-saver soak.** **FRAME-RATE SOAK PASS, RENDERING
+   FAIL with `cache-rendering-hint` (see below; 2026-10-02).** The
    unmodified hard-float Slint screensaver (`/root/screensaver`, femtovg,
    `cache-rendering-hint` on, transform-only animation) runs on 1.4 through the
    **1.4 hard-float shim** and `present=2`:
@@ -325,6 +326,24 @@ Teardown`, `DCNohwCompleteFlip` with `IMG_TRUE`); committed `15f02fd554af`.
    - **35-min soak**: 77,757 frames, **37.0 fps** steady (36.5–37.1 per-minute),
      0 HWR, 0 cleanup timeouts/faults, clean exit, dcnohw refcount 0, app RSS
      flat at 24.1 MB, MemAvailable flat at ~44 MB.
+   - **BUT the picture is wrong (found 2026-10-02):** with `cache-rendering-hint`
+     on, most tiles are missing (user saw 2 of 9). The soak only counted frames
+     and HWRs. Buffer readback (`DC_DUMP=` in `tools/dc_nohw_export_test.c`)
+     shows `SLINT_CACHE=0` draws all 9 tiles; cache on loses the tiles baked in
+     the startup burst. Animated `opacity` makes each tile an offscreen layer and
+     the cache nests a second target inside it (`tools/gl-fbo-trace.c`): layer A
+     cleared → cache target B created and drawn → back to A to sample B. No GL
+     errors or incomplete FBOs; `glFinish` at switches and NULL texture data
+     don't help. `tools/fbo-reentry-test.c` reproduces femtovg's order
+     (create B while A has a pending clear): 1.6 passes, **1.4 hangs the client
+     in `LinuxEventObjectWait`** (no HWR). Bug is in DDK 1.4 (closed userspace
+     GLES). Interim: run with `SLINT_CACHE=0` on 1.4.
+   - **Don't `rmmod dcnohw` while any client may still hold a display device:**
+     dcnohw takes no module reference on open, so pvrsrvkm's
+     `CloseDCDeviceCallBack` jumped into the unloaded module and oopsed (needed a
+     reboot). Fix: `try_module_get`/`module_put` in dcnohw open/close.
+   - Restoring 1.6 after a 1.4 session needs `pvrsrvinit` —
+     use `/etc/init.d/powervr start`, not just `modprobe dcnohw`.
    - **Not yet covered** by the pass criteria: input (the screensaver has none)
      and restart-under-load; the HF-14 shim + VAO stub are hand-built, not yet
      in `sgx-ddk16/Makefile hf-shim-14` / packaging.
