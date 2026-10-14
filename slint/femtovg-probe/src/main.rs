@@ -133,6 +133,218 @@ fn env_flag(name: &str) -> bool {
     std::env::var(name).map(|v| v != "0" && !v.is_empty()).unwrap_or(false)
 }
 
+// FVG_MODE=mini: smallest femtovg chain. Frame 0 fills a plain rect into image 0, copies image k-1
+// into image k for FVG_MINI_HOPS-1 more images, then draws the last image on the window; later
+// frames only draw the last image. FVG_MINI_AA=1 anti-aliases the fill, FVG_MINI_NOCLEAR=1 skips
+// the image clears, FVG_MINI_NOSCREENCLEAR=1 skips the window clear in frame 0, FVG_MINI_REENTER=1
+// opens (binds+clears) the last image before the first one renders, as Slint's layer does,
+// FVG_MINI_ROUND=1 fills a rounded rect instead of a rect.
+// One 150x96 tile at (20,20); its centre is read back before every swap.
+fn run_mini(
+    canvas: &mut Canvas<OpenGl>,
+    egl: &egl::DynamicInstance<egl::EGL1_4>,
+    display: egl::Display,
+    surface: egl::Surface,
+    w: u32,
+    h: u32,
+) {
+    use glow::HasContext;
+    let gl = unsafe {
+        glow::Context::from_loader_function(|s| {
+            egl.get_proc_address(s).map_or(std::ptr::null(), |f| f as usize as *const c_void)
+        })
+    };
+    let hops = env_u32("FVG_MINI_HOPS", 1).max(1);
+    let frames = env_u32("FVG_FRAMES", 3).max(1);
+    let aa = env_flag("FVG_MINI_AA");
+    let clear = !env_flag("FVG_MINI_NOCLEAR");
+    let noscreenclear = env_flag("FVG_MINI_NOSCREENCLEAR");
+    let reenter = env_flag("FVG_MINI_REENTER");
+    let round = env_flag("FVG_MINI_ROUND");
+    let (tw, th): (u32, u32) = (150, 96);
+    let (x, y) = (20.0f32, 20.0f32);
+    let mut imgs = Vec::new();
+    let mut lit = false;
+    for f in 0..frames {
+        canvas.set_render_target(RenderTarget::Screen);
+        canvas.set_size(w, h, 1.0);
+        if !(f == 0 && noscreenclear) {
+            canvas.clear_rect(0, 0, w, h, Color::rgb(11, 11, 20));
+        }
+        if f == 0 {
+            for _ in 0..hops {
+                imgs.push(
+                    canvas
+                        .create_image_empty(tw as usize, th as usize, PixelFormat::Rgba8, ImageFlags::FLIP_Y)
+                        .expect("image"),
+                );
+            }
+            if reenter {
+                canvas.set_render_target(RenderTarget::Image(imgs[hops as usize - 1]));
+                canvas.clear_rect(0, 0, tw, th, Color::rgba(0, 0, 0, 0));
+            }
+            for k in 0..hops {
+                let img = imgs[k as usize];
+                canvas.set_render_target(RenderTarget::Image(img));
+                if clear && !(reenter && k == hops - 1) {
+                    canvas.clear_rect(0, 0, tw, th, Color::rgba(0, 0, 0, 0));
+                }
+                let mut p = Path::new();
+                if k == 0 && round {
+                    p.rounded_rect(0.5, 0.5, tw as f32 - 1.0, th as f32 - 1.0, 14.0);
+                } else {
+                    p.rect(0.0, 0.0, tw as f32, th as f32);
+                }
+                let paint = if k == 0 {
+                    Paint::color(Color::rgb(51, 102, 204)).with_anti_alias(aa)
+                } else {
+                    Paint::image(imgs[k as usize - 1], 0.0, 0.0, tw as f32, th as f32, 0.0, 1.0).with_anti_alias(false)
+                };
+                canvas.fill_path(&p, &paint);
+            }
+            canvas.set_render_target(RenderTarget::Screen);
+        }
+        let mut r = Path::new();
+        r.rect(x, y, tw as f32, th as f32);
+        canvas.fill_path(
+            &r,
+            &Paint::image(*imgs.last().unwrap(), x, y, tw as f32, th as f32, 0.0, 1.0).with_anti_alias(false),
+        );
+        canvas.flush();
+        let mut px = [0u8; 4];
+        unsafe {
+            gl.bind_framebuffer(glow::FRAMEBUFFER, None);
+            gl.read_pixels(
+                (x + tw as f32 / 2.0) as i32,
+                (h as f32 - 1.0 - (y + th as f32 / 2.0)) as i32,
+                1,
+                1,
+                glow::RGBA,
+                glow::UNSIGNED_BYTE,
+                glow::PixelPackData::Slice(Some(&mut px)),
+            );
+        }
+        lit = px[0].max(px[1]).max(px[2]) > 80;
+        println!("frame {f}: {:02x}{:02x}{:02x} {}", px[0], px[1], px[2], if lit { "lit" } else { "BLACK" });
+        egl.swap_buffers(display, surface).expect("swap");
+    }
+    println!("RESULT: {}", if lit { "lit" } else { "BLACK" });
+}
+
+// FVG_MODE=layer: femtovg-only repro of Slint's cache-rendering-hint inside an opacity layer.
+// Frame 0 bakes each tile (layer cleared, cache created+filled, cache drawn into layer, layer drawn
+// to the window); later frames only composite the layers. Each tile's centre is read back from the
+// window before every swap. FVG_LAYER_DIRECT=1 composites the cache images instead (control);
+// FVG_LAYER_NOFBO=1 draws the tiles straight to the window every frame (baseline for the readback).
+fn run_layer(
+    canvas: &mut Canvas<OpenGl>,
+    egl: &egl::DynamicInstance<egl::EGL1_4>,
+    display: egl::Display,
+    surface: egl::Surface,
+    w: u32,
+    h: u32,
+) {
+    use glow::HasContext;
+    let gl = unsafe {
+        glow::Context::from_loader_function(|s| {
+            egl.get_proc_address(s).map_or(std::ptr::null(), |f| f as usize as *const c_void)
+        })
+    };
+    let ntiles = env_u32("FVG_TILES", 9).min(9);
+    let frames = env_u32("FVG_FRAMES", 3).max(1);
+    let direct = env_flag("FVG_LAYER_DIRECT");
+    let nofbo = env_flag("FVG_LAYER_NOFBO");
+    let (tw, th): (u32, u32) = (150, 96);
+    let pos = |i: u32| (20.0 + (i % 3) as f32 * 160.0, 20.0 + (i / 3) as f32 * 106.0);
+    let palette = [
+        Color::rgb(51, 102, 204), Color::rgb(204, 51, 51), Color::rgb(51, 204, 102),
+        Color::rgb(204, 204, 51), Color::rgb(204, 51, 204), Color::rgb(51, 204, 204),
+        Color::rgb(230, 140, 40), Color::rgb(140, 90, 220), Color::rgb(220, 220, 220),
+    ];
+    let mut layers = Vec::new();
+    let mut caches = Vec::new();
+    let mut lit = 0;
+    // femtovg 0.27 set_size() queues a switch to Screen without updating the tracked target, so a
+    // later set_render_target(Image) is skipped; the GL renderer sets the image viewport/viewSize itself
+    let switch = |c: &mut Canvas<OpenGl>, t: RenderTarget, _sw: u32, _sh: u32| {
+        if env_flag("FVG_LAYER_FLUSH") {
+            c.flush();
+        }
+        c.set_render_target(t);
+    };
+    for f in 0..frames {
+        canvas.set_render_target(RenderTarget::Screen);
+        canvas.set_size(w, h, 1.0);
+        canvas.clear_rect(0, 0, w, h, Color::rgb(11, 11, 20));
+        for i in 0..ntiles {
+            let (x, y) = pos(i);
+            if nofbo {
+                let mut p = Path::new();
+                p.rounded_rect(x + 0.5, y + 0.5, tw as f32 - 1.0, th as f32 - 1.0, 14.0);
+                canvas.fill_path(&p, &Paint::color(palette[i as usize]));
+                continue;
+            }
+            if f == 0 {
+                let layer = canvas
+                    .create_image_empty(tw as usize, th as usize, PixelFormat::Rgba8, ImageFlags::FLIP_Y)
+                    .expect("layer image");
+                switch(canvas, RenderTarget::Image(layer), tw, th);
+                canvas.clear_rect(0, 0, tw, th, Color::rgba(0, 0, 0, 0));
+                let cache = canvas
+                    .create_image_empty(tw as usize, th as usize, PixelFormat::Rgba8, ImageFlags::FLIP_Y)
+                    .expect("cache image");
+                switch(canvas, RenderTarget::Image(cache), tw, th);
+                canvas.clear_rect(0, 0, tw, th, Color::rgba(0, 0, 0, 0));
+                let mut p = Path::new();
+                p.rounded_rect(0.5, 0.5, tw as f32 - 1.0, th as f32 - 1.0, 14.0);
+                canvas.fill_path(&p, &Paint::color(palette[i as usize]));
+                switch(canvas, RenderTarget::Image(layer), tw, th);
+                let mut q = Path::new();
+                q.rect(0.0, 0.0, tw as f32, th as f32);
+                canvas.fill_path(
+                    &q,
+                    &Paint::image(cache, 0.0, 0.0, tw as f32, th as f32, 0.0, 1.0).with_anti_alias(false),
+                );
+                switch(canvas, RenderTarget::Screen, w, h);
+                layers.push(layer);
+                caches.push(cache);
+            }
+            let img = if direct { caches[i as usize] } else { layers[i as usize] };
+            let mut r = Path::new();
+            r.rect(x, y, tw as f32, th as f32);
+            canvas.fill_path(
+                &r,
+                &Paint::image(img, x, y, tw as f32, th as f32, 0.0, 1.0).with_anti_alias(false),
+            );
+        }
+        canvas.flush();
+        lit = 0;
+        let mut line = String::new();
+        for i in 0..ntiles {
+            let (x, y) = pos(i);
+            let mut px = [0u8; 4];
+            unsafe {
+                gl.bind_framebuffer(glow::FRAMEBUFFER, None);
+                gl.read_pixels(
+                    (x + tw as f32 / 2.0) as i32,
+                    (h as f32 - 1.0 - (y + th as f32 / 2.0)) as i32,
+                    1,
+                    1,
+                    glow::RGBA,
+                    glow::UNSIGNED_BYTE,
+                    glow::PixelPackData::Slice(Some(&mut px)),
+                );
+            }
+            let on = px[0].max(px[1]).max(px[2]) > 80;
+            lit += on as u32;
+            line += &format!(" {:02x}{:02x}{:02x}{}", px[0], px[1], px[2], if on { "" } else { "!" });
+        }
+        println!("frame {f}: {lit}/{ntiles} lit:{line}");
+        egl.swap_buffers(display, surface).expect("swap");
+    }
+    println!("RESULT: {lit}/{ntiles} tiles lit{}", if lit < ntiles { "  => BLACK TILES" } else { "" });
+}
+
 fn env_u32(name: &str, default: u32) -> u32 {
     std::env::var(name).ok().and_then(|v| v.parse().ok()).unwrap_or(default)
 }
@@ -227,6 +439,15 @@ fn main() {
 
     let mut canvas = Canvas::new(renderer).expect("FemtoVG Canvas");
     canvas.set_size(w, h, 1.0);
+
+    if window_mode && std::env::var("FVG_MODE").as_deref() == Ok("layer") {
+        run_layer(&mut canvas, &egl, display, surface, w, h);
+        return;
+    }
+    if window_mode && std::env::var("FVG_MODE").as_deref() == Ok("mini") {
+        run_mini(&mut canvas, &egl, display, surface, w, h);
+        return;
+    }
 
     let fill = Color::rgb(51, 102, 153);
 

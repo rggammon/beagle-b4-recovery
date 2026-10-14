@@ -47,6 +47,46 @@ Chromium's workaround feature flags:
   than Chromium's full "replace glClear with draw-quad" mitigation, but
   sufficient for our failure mode.
 
+### `glDetachShader` after link → vertex-shader uniforms dropped (DDK 1.4)
+
+- **Isolated 2026-10-13** on DDK 1.4.14.2616 userspace (stage-6 kernel
+  modules); also reproduces on the Pandora (same 2616 libs). Symptom: Slint
+  `cache-rendering-hint` tiles missing (1 of 9 visible). femtovg renders each
+  tile into an image, copies it into a second image, then composites that to
+  the window. The copy and composite draws produce no pixels.
+- **Trigger:** femtovg 0.27 (and upstream as of 2026-09) calls
+  `glDetachShader` for both stages right after `glLinkProgram`
+  (`src/renderer/opengl/program.rs`). Replay bisection on a recorded femtovg
+  stream, every variant run 2× with a fix-applied control:
+  - drop the detach (keep `glDeleteShader`) → renders; drop the delete only → still black;
+  - add detach to a working stream → black; add delete only → renders;
+  - detach only the vertex shaders → black; only the fragment shaders → renders;
+  - detach, then re-attach the same shaders (immediately or after all setup) → renders.
+  So nothing is freed: the driver consults the program's currently attached
+  **vertex** shader at draw time.
+- **Mechanism (observed, not proven):** on the first render after a
+  render-target switch the vertex-shader uniform block is not emitted (the TA
+  status sync advances +60 instead of +68 per render in a kernel kick log),
+  and the shader reads stale constant-ring data (`viewSize` ≥ 2^64, so
+  `vertex*viewSize/viewSize` is NaN). A size-changing `glBufferData` on the
+  bound VBO forces revalidation and also cures it; same-size re-uploads,
+  `glBufferSubData`, orphaning and rebinds do not.
+- **Not triggers (ruled out):** op order, uniform values, fill geometry, VBO
+  size, shader text, texture init data, CPU cache coherency, GPU memory
+  placement.
+- **Prior report:** bgfx issue #1105 / PR #1141 (2017), PowerVR SGX540,
+  `OpenGL ES 2.0 build 1.8@905891`: "it only has problem with programs that
+  are used for rendering and whose shaders are detached". bgfx keeps an
+  `m_detachShader` workaround. Not in Chromium's bug list.
+- **Our workaround (no app change):** `tools/gles-oes-vao-stub.c`
+  (`/opt/sgx-ddk14-hf/lib/libsgxvao.so`, already `LD_PRELOAD`ed for femtovg on
+  1.4) makes `glDetachShader` a no-op; `SGXVAO_REAL_DETACH=1` restores the real
+  call to reproduce the bug. Verified: real screensaver 9/9 tiles with the
+  cache on, femtovg layer probe 0/9 → 9/9. Legal GL: shaders stay attached
+  and are freed with the program. Only breaks apps that swap a shader into an
+  existing program and re-link (none here). The upstream fix would be to stop
+  detaching in femtovg.
+
 ### Discipline note
 
 - Never issue a reboot to a board that is still handling hardware recovery. The
@@ -169,6 +209,9 @@ Derived from the catalog + our own DDK 1.6 recovery evidence:
 - **Assume streaming buffer uploads are a driver hazard.** Entry 1 recommends
   client-side arrays for streaming data on GLES < 3.0 Imagination. Big
   per-frame `glBufferData` calls are the exact shape that entry says to avoid.
+- **Never `glDetachShader` from a program you will draw with.** Delete the
+  shaders after linking if you like, but leave them attached until the program
+  is deleted (DDK 1.4 drops vertex-shader uniforms otherwise, see above).
 - **When investigating a new stall, check the tile-store metadata path
   first.** Attachment-load / fast-clear / discard-framebuffer is the single
   most bug-prone subsystem in this driver family across every product
@@ -185,3 +228,6 @@ Derived from the catalog + our own DDK 1.6 recovery evidence:
 - [lessons-learned.md](./lessons-learned.md) — general early-B4 hard-won notes.
 - [`tools/tri-inline.c`](../tools/tri-inline.c) — the zero-nanovg-dependency
   single-file storm repro used to isolate the `glClear` bug.
+- [`tools/gl-record.c`](../tools/gl-record.c) /
+  [`tools/gl-replay.c`](../tools/gl-replay.c) — GL stream recorder and replayer
+  used to isolate the `glDetachShader` bug.

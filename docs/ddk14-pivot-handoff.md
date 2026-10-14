@@ -342,6 +342,11 @@ Teardown`, `DCNohwCompleteFlip` with `IMG_TRUE`); committed `15f02fd554af`.
      `LinuxEventObjectWait` after `RESULT` — on both B4 1.4 and the Pandora.) The
      trigger is still something else in femtovg's stream (NPOT 150×96 targets,
      stencil/scissor/blend state, …). Interim: run with `SLINT_CACHE=0` on 1.4.
+   - **RESOLVED 2026-10-13:** the trigger is femtovg's `glDetachShader` after
+     link (DDK 1.4 then drops vertex-shader uniforms on the first render after a
+     target switch). `libsgxvao.so` now makes `glDetachShader` a no-op; the
+     screensaver shows all 9 tiles with the cache on. See
+     [powervr-sgx-driver-bugs.md](./powervr-sgx-driver-bugs.md).
    - **Don't `rmmod dcnohw` while any client may still hold a display device:**
      dcnohw takes no module reference on open, so pvrsrvkm's
      `CloseDCDeviceCallBack` jumped into the unloaded module and oopsed (needed a
