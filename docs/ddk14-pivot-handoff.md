@@ -351,6 +351,16 @@ Teardown`, `DCNohwCompleteFlip` with `IMG_TRUE`); committed `15f02fd554af`.
      dcnohw takes no module reference on open, so pvrsrvkm's
      `CloseDCDeviceCallBack` jumped into the unloaded module and oopsed (needed a
      reboot). Fix: `try_module_get`/`module_put` in dcnohw open/close.
+   - **One display client at a time (fixed 2026-10-13):** the stage-6 "reclaim"
+     in `CreateDCSwapChain` freed any existing swapchain, including a live
+     client's, so a second GPU client made the first one's exit double-free it
+     (Oops in `DestroyDCSwapChain`, stuck processes, reboot). dc_nohw (1.4 and
+     1.6) now returns `PVRSRV_ERROR_FLIP_CHAIN_EXISTS` (the second client's
+     `eglCreateWindowSurface` fails) and validates chain handles with a
+     generation ID, as DDK 1.17 omaplfb does. Trade-off: if pvrsrvkm ever
+     preserves a chain at teardown ("preserving swapchain" in dmesg), new clients
+     are refused until dcnohw is reloaded. Test harnesses must wait for the
+     previous client to exit (`pgrep -f`, not `-x`, for `ld-linux` launches).
    - Restoring 1.6 after a 1.4 session needs `pvrsrvinit` —
      use `/etc/init.d/powervr start`, not just `modprobe dcnohw`.
    - **Not yet covered** by the pass criteria: input (the screensaver has none)

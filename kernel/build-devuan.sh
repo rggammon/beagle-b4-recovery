@@ -16,7 +16,7 @@
 set -eu
 
 REPO=${OPENPVRSGX_REPO:-https://github.com/rggammon/linux_openpvrsgx}
-REF=${OPENPVRSGX_REF:-079d036db665c4af56c29ef6e03e4968a8f35894}
+REF=${OPENPVRSGX_REF:-c38943a3869d10b0f0447b837a298283fb3ce3e6}
 CROSS=${CROSS_COMPILE:-arm-linux-gnueabihf-}
 JOBS=${JOBS:-$(nproc)}
 here=$(cd "$(dirname "$0")" && pwd)
