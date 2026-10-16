@@ -315,6 +315,13 @@ esac
 SYSV
 chmod 755 "$R/etc/init.d/beagle-memory"
 chroot "$R" update-rc.d beagle-memory defaults
+
+# Kiosk session on tty7 (launcher -> app -> launcher); boots into it once
+# /usr/local/bin/kiosk-launcher is installed.
+install -m 0755 "$here/devuan/kiosk" "$R/usr/local/bin/kiosk"
+install -m 0755 "$here/devuan/kiosk.init" "$R/etc/init.d/kiosk"
+chroot "$R" update-rc.d kiosk defaults
+sh -n "$R/usr/local/bin/kiosk" || { echo "kiosk script has syntax errors" >&2; exit 1; }
 cleanup
 for mp in "$R/dev/pts" "$R/dev" "$R/sys" "$R/proc"; do
     if mountpoint -q "$mp"; then

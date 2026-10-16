@@ -390,6 +390,17 @@ Re-run the Stage 0 lifecycle/soak on 1.4 after each kernel-side change, and the
 > the new debs pass, and femtovg-probe `FVG_MODE=layer` through the new shim is
 > 9/9 (0/9 with `SGXVAO_REAL_DETACH=1`), dmesg clean. The notes below are the
 > original plan.
+>
+> **Kiosk session (2026-10-15):** `rootfs/devuan/kiosk` replaces `sgxmode`'s
+> console park with plain tools: perl `ioctl`s put tty7 in `KD_GRAPHICS` +
+> `K_OFF` before `busybox openvt -s` switches to it, and the session holds
+> `/dev/dri/card0` (DRM master) so fbcon stays parked. Loop: launcher
+> (`/usr/local/bin/kiosk-launcher`, writes `picframe|demo|console` to
+> `$KIOSK_RESULT`) → app in its own process group → launcher. Esc held ~2 s or
+> the board's USER button (`BTN_EXTRA` 276, `gpio_keys`) ends the app;
+> `console` or `kiosk stop` restores `KD_TEXT`/`K_UNICODE` and switches to tty1.
+> `/etc/init.d/kiosk` starts it at boot once the launcher exists. Validated on
+> the B4 with a stand-in launcher and `gles2test1` (all three exit paths).
 The Devuan image is **inherently 1.6** at three layers, so today's 1.4 work is a
 live-board hand-swap (reboot = back to 1.6 control). Baking a 1.4 image (Stage 8)
 means:

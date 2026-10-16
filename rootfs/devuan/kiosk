@@ -1,0 +1,166 @@
+#!/bin/sh
+# Kiosk session: a Slint launcher picks an app, the app runs, then back to the
+# launcher. Runs on its own VT in graphics mode (console text and keyboard off)
+# while holding DRM master so fbcon stays parked. The launcher's "console" choice
+# (or `kiosk stop`) ends the session and returns to the text console on tty1.
+#
+#   kiosk [start]   take over VT$KIOSK_VT and run the session
+#   kiosk stop      end the session
+#
+# Launcher contract: write an app id (picframe, demo, console) to $KIOSK_RESULT
+# and exit. While an app runs, holding Esc for ~2 s or pressing the board's USER
+# button returns to the launcher.
+set -u
+
+VT=${KIOSK_VT:-7}
+CONSOLE_VT=1
+LOG=${KIOSK_LOG:-/var/log/kiosk.log}
+PIDFILE=/run/kiosk.pid
+LAUNCHER=${KIOSK_LAUNCHER:-/usr/local/bin/kiosk-launcher}
+export KIOSK_RESULT=/run/kiosk.choice
+
+KEY_ESC=1
+BTN_EXTRA=276  # gpio_keys "user" button on the BeagleBoard
+
+log() { echo "$(date '+%F %T') kiosk: $*" >>"$LOG"; }
+
+# $1 = /dev/ttyN, $2 = graphics|text. KDSETMODE 0x4B3A (KD_TEXT 0, KD_GRAPHICS 1),
+# KDSKBMODE 0x4B45 (K_UNICODE 3, K_OFF 4).
+vt_mode() {
+    perl -e '
+        my ($tty, $mode) = @ARGV;
+        open(my $t, "+<", $tty) or die "$tty: $!\n";
+        my ($kd, $kb) = $mode eq "graphics" ? (1, 4) : (0, 3);
+        ioctl($t, 0x4B45, $kb) or die "KDSKBMODE: $!\n";
+        ioctl($t, 0x4B3A, $kd) or die "KDSETMODE: $!\n";
+    ' "$1" "$2"
+}
+
+# Ends app group $1 on Esc held ~2 s or a USER button press.
+HOTKEY_PL='
+    my ($pg, $esc, $btn) = @ARGV;
+    my (@fh, $rin);
+    $rin = "";
+    for my $p (glob "/dev/input/event*") {
+        open(my $f, "<:raw", $p) or next;
+        push @fh, $f;
+        vec($rin, fileno($f), 1) = 1;
+    }
+    my $since;
+    while (kill(0, $pg)) {
+        last if defined $since && time - $since >= 2;
+        my $n = select(my $rout = $rin, undef, undef, 0.5);
+        next unless $n && $n > 0;
+        for my $f (@fh) {
+            next unless vec($rout, fileno($f), 1);
+            sysread($f, my $buf, 16 * 64) or next;
+            for (my $o = 0; $o + 16 <= length $buf; $o += 16) {
+                my (undef, undef, $type, $code, $val) = unpack("l l S S l", substr($buf, $o, 16));
+                next unless $type == 1;
+                if ($code == $btn && $val == 1) { $since = 0 }
+                elsif ($code == $esc) { $since = $val ? ($since // time) : undef }
+            }
+        }
+    }
+    exit 0 unless kill(0, $pg);
+    kill("-TERM", $pg);
+    for (1 .. 10) { select(undef, undef, undef, 0.5); exit 0 unless kill(0, -$pg) }
+    kill("-KILL", $pg);
+'
+
+app=
+watch=
+
+# Run "$@" as its own process group and wait for it; with --hotkey, Esc/USER ends it.
+run() {
+    hotkey=0
+    [ "$1" = --hotkey ] && { hotkey=1; shift; }
+    log "run: $*"
+    setsid "$@" </dev/null >>"$LOG" 2>&1 4>&- &
+    app=$!
+    if [ "$hotkey" = 1 ]; then
+        perl -e "$HOTKEY_PL" "$app" "$KEY_ESC" "$BTN_EXTRA" </dev/null 4>&- &
+        watch=$!
+    fi
+    wait "$app"
+    rc=$?
+    [ -z "$watch" ] || kill "$watch" 2>/dev/null
+    kill -KILL -"$app" 2>/dev/null
+    app=
+    watch=
+    log "exit: rc=$rc"
+    return "$rc"
+}
+
+run_app() {
+    case "$1" in
+        picframe) run --hotkey sgx-ddk14-hf-run picframe ;;
+        demo) run --hotkey sh -c 'cd /opt/sgx-ddk14/bin && exec sgx-ddk14-run gles2test1 1000000' ;;
+        *) log "unknown app '$1'" ;;
+    esac
+}
+
+cleanup() {
+    if [ -n "$app" ]; then
+        kill -TERM -"$app" 2>/dev/null
+        sleep 2
+        kill -KILL -"$app" 2>/dev/null
+    fi
+    [ -z "$watch" ] || kill "$watch" 2>/dev/null
+    exec 4>&-
+    vt_mode "/dev/tty$VT" text
+    busybox chvt "$CONSOLE_VT"
+    rm -f "$PIDFILE" "$KIOSK_RESULT"
+    log "session end"
+}
+
+session() {
+    echo $$ >"$PIDFILE"
+    trap cleanup EXIT
+    trap 'exit 0' TERM INT HUP
+    # Holding DRM master keeps fbcon from restoring its framebuffer over dcnohw.
+    exec 4<>/dev/dri/card0
+    log "session start on tty$VT"
+    fails=0
+    while :; do
+        rm -f "$KIOSK_RESULT"
+        run sgx-ddk14-hf-run "$LAUNCHER"
+        choice=$(cat "$KIOSK_RESULT" 2>/dev/null || true)
+        case "$choice" in
+            console) exit 0 ;;
+            '')
+                fails=$((fails + 1))
+                if [ "$fails" -ge 3 ]; then
+                    log "launcher failed $fails times; returning to the console"
+                    exit 1
+                fi
+                sleep 2
+                ;;
+            *)
+                fails=0
+                run_app "$choice"
+                ;;
+        esac
+    done
+}
+
+running() { [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; }
+
+case "${1:-start}" in
+    start)
+        [ "$(id -u)" = 0 ] || { echo 'kiosk: run as root' >&2; exit 1; }
+        running && { echo 'kiosk: already running' >&2; exit 0; }
+        # Graphics mode before the switch, so the VT's text never flashes.
+        vt_mode "/dev/tty$VT" graphics
+        busybox openvt -c "$VT" -s -- "$0" session
+        ;;
+    session) session ;;
+    stop)
+        running || exit 0
+        kill "$(cat "$PIDFILE")"
+        ;;
+    *)
+        echo 'usage: kiosk [start|stop]' >&2
+        exit 2
+        ;;
+esac
