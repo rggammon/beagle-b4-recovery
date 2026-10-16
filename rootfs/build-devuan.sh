@@ -3,17 +3,18 @@
 #
 # Two-phase bootstrap so the GPU packages don't drag in a desktop environment:
 #   Phase 1: a clean Devuan daedalus armhf base (mmdebstrap, no maemo repo).
-#   Phase 2: install the local matched DDK 1.6 armel packages (softfp, /opt/sgx-ddk16).
+#   Phase 2: install the local matched DDK 1.4 armel packages (softfp, /opt/sgx-ddk14).
 # Then graft the 7.2 SGX kernel modules (pvrsrvkm) + a small overlay, and make an ext4.
 #
-# The GPU userspace and kernel are both DDK 1.6.16.3977. The proprietary soft-float
-# userspace is isolated under /opt/sgx-ddk16 and runs with Devuan's armel libc.
+# The GPU userspace and kernel are both DDK 1.4.14.2616. The proprietary soft-float
+# userspace is isolated under /opt/sgx-ddk14 and runs with Devuan's armel libc.
+# Hard-float apps (e.g. Slint) run on it through the ABI shim in /opt/sgx-ddk14-hf.
 #
 # NO swap is baked in -- add it on the board later (e.g. a swapfile or a USB stick).
 #
 # Run as root (mounts + chroot). Env: OUT (default ../out), WORK (default ../build-devuan),
-# ARCH_DEB (armhf), SGX_DDK16_DEB_DIR. Consumes OUT/modroot-devuan (from
-# kernel/build-devuan.sh) and the sgx-ddk16-um/tools armel packages.
+# ARCH_DEB (armhf), SGX_DDK14_DEB_DIR, SGX_DDK14_HF_DIR. Consumes OUT/modroot-devuan (from
+# kernel/build-devuan.sh), the sgx-ddk14-um/tools/dev armel packages and the built shim.
 set -eu
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -22,30 +23,34 @@ work=${WORK:-$here/../build-devuan}
 keys="$here/keys-devuan"
 R="$work/rootfs-devuan"
 mods="$out/modroot-devuan"
-ddk16_deb_dir=${SGX_DDK16_DEB_DIR:-}
-ddk16_hf_dir=${SGX_DDK16_HF_DIR:-}
+ddk_deb_dir=${SGX_DDK14_DEB_DIR:-}
+ddk_hf_dir=${SGX_DDK14_HF_DIR:-}
 mkdir -p "$out" "$work"
 
 [ "$(id -u)" = 0 ] || { echo "run as root (sudo -E $0)" >&2; exit 1; }
 [ -d "$mods" ] || { echo "missing $mods (run kernel/build-devuan.sh first)" >&2; exit 1; }
-[ -d "$ddk16_deb_dir" ] || {
-    echo 'set SGX_DDK16_DEB_DIR to the directory containing the DDK 1.6 packages' >&2
+[ -d "$ddk_deb_dir" ] || {
+    echo 'set SGX_DDK14_DEB_DIR to the directory containing the DDK 1.4 packages' >&2
     exit 1
 }
-ddk16_um=$(find "$ddk16_deb_dir" -maxdepth 1 -type f -name 'sgx-ddk16-um_*_armel.deb' -print -quit)
-ddk16_tools=$(find "$ddk16_deb_dir" -maxdepth 1 -type f -name 'sgx-ddk16-tools_*_armel.deb' -print -quit)
-ddk16_dev=$(find "$ddk16_deb_dir" -maxdepth 1 -type f -name 'sgx-ddk16-dev_*_armel.deb' -print -quit)
-[ -n "$ddk16_um" ] || { echo "missing sgx-ddk16-um armel package in $ddk16_deb_dir" >&2; exit 1; }
-[ -n "$ddk16_tools" ] || { echo "missing sgx-ddk16-tools armel package in $ddk16_deb_dir" >&2; exit 1; }
-[ -n "$ddk16_dev" ] || { echo "missing sgx-ddk16-dev armel package in $ddk16_deb_dir" >&2; exit 1; }
-[ "$(dpkg-deb -f "$ddk16_um" Architecture)" = armel ] || { echo "DDK runtime package is not armel" >&2; exit 1; }
-[ "$(dpkg-deb -f "$ddk16_tools" Architecture)" = armel ] || { echo "DDK tools package is not armel" >&2; exit 1; }
-[ "$(dpkg-deb -f "$ddk16_dev" Architecture)" = armel ] || { echo "DDK dev package is not armel" >&2; exit 1; }
-[ "$(dpkg-deb -f "$ddk16_um" Version)" = "$(dpkg-deb -f "$ddk16_tools" Version)" ] || {
+[ -n "$ddk_hf_dir" ] && [ -f "$ddk_hf_dir/lib/libEGL.so" ] && [ -f "$ddk_hf_dir/lib/libsgxvao.so" ] && [ -d "$ddk_hf_dir/ddk" ] || {
+    echo 'set SGX_DDK14_HF_DIR to a built shim tree (sgx-ddk14/build/hf-shim from `make hf-shim`)' >&2
+    exit 1
+}
+ddk_um=$(find "$ddk_deb_dir" -maxdepth 1 -type f -name 'sgx-ddk14-um_*_armel.deb' -print -quit)
+ddk_tools=$(find "$ddk_deb_dir" -maxdepth 1 -type f -name 'sgx-ddk14-tools_*_armel.deb' -print -quit)
+ddk_dev=$(find "$ddk_deb_dir" -maxdepth 1 -type f -name 'sgx-ddk14-dev_*_armel.deb' -print -quit)
+[ -n "$ddk_um" ] || { echo "missing sgx-ddk14-um armel package in $ddk_deb_dir" >&2; exit 1; }
+[ -n "$ddk_tools" ] || { echo "missing sgx-ddk14-tools armel package in $ddk_deb_dir" >&2; exit 1; }
+[ -n "$ddk_dev" ] || { echo "missing sgx-ddk14-dev armel package in $ddk_deb_dir" >&2; exit 1; }
+[ "$(dpkg-deb -f "$ddk_um" Architecture)" = armel ] || { echo "DDK runtime package is not armel" >&2; exit 1; }
+[ "$(dpkg-deb -f "$ddk_tools" Architecture)" = armel ] || { echo "DDK tools package is not armel" >&2; exit 1; }
+[ "$(dpkg-deb -f "$ddk_dev" Architecture)" = armel ] || { echo "DDK dev package is not armel" >&2; exit 1; }
+[ "$(dpkg-deb -f "$ddk_um" Version)" = "$(dpkg-deb -f "$ddk_tools" Version)" ] || {
     echo "DDK runtime and tools package versions do not match" >&2
     exit 1
 }
-[ "$(dpkg-deb -f "$ddk16_um" Version)" = "$(dpkg-deb -f "$ddk16_dev" Version)" ] || {
+[ "$(dpkg-deb -f "$ddk_um" Version)" = "$(dpkg-deb -f "$ddk_dev" Version)" ] || {
     echo "DDK runtime and dev package versions do not match" >&2
     exit 1
 }
@@ -83,7 +88,7 @@ mmdebstrap --arch="${ARCH_DEB:-armhf}" --variant=apt \
     "deb http://deb.devuan.org/merged daedalus main"
 echo "PHASE1 base: $(du -sh "$R" | cut -f1)"
 
-echo "=== PHASE 2: install the matched DDK 1.6 soft-float userspace ==="
+echo "=== PHASE 2: install the matched DDK 1.4 soft-float userspace ==="
 cp "$DEVKR" "$R/etc/apt/trusted.gpg.d/devuan-archive-keyring.gpg"
 cp /etc/resolv.conf "$R/etc/resolv.conf"
 mount --bind /proc "$R/proc"; mount --bind /sys "$R/sys"
@@ -114,13 +119,16 @@ apt_install_retry() {
     done
 }
 
-install -m 0644 "$ddk16_um" "$R/tmp/sgx-ddk16-um_armel.deb"
-install -m 0644 "$ddk16_tools" "$R/tmp/sgx-ddk16-tools_armel.deb"
-install -m 0644 "$ddk16_dev" "$R/tmp/sgx-ddk16-dev_armel.deb"
+install -m 0644 "$ddk_um" "$R/tmp/sgx-ddk14-um_armel.deb"
+install -m 0644 "$ddk_tools" "$R/tmp/sgx-ddk14-tools_armel.deb"
+install -m 0644 "$ddk_dev" "$R/tmp/sgx-ddk14-dev_armel.deb"
 apt_install_retry \
-    /tmp/sgx-ddk16-um_armel.deb /tmp/sgx-ddk16-tools_armel.deb \
-    /tmp/sgx-ddk16-dev_armel.deb \
+    /tmp/sgx-ddk14-um_armel.deb /tmp/sgx-ddk14-tools_armel.deb \
+    /tmp/sgx-ddk14-dev_armel.deb \
     drm-info
+
+# Runtime deps of Slint apps (statically linked Rust; fontconfig for text).
+apt_install_retry libfontconfig1 fonts-dejavu-core
 
 # On-board soft-float armel build toolchain. The board's glibc (2.36) matches the
 # target, so DDK-linked programs compile natively with no ABI/glibc-version shim.
@@ -149,51 +157,47 @@ DEF
 chroot "$R" update-rc.d busybox-syslogd defaults
 chroot "$R" update-rc.d busybox-klogd defaults
 
-rm -f "$R/usr/sbin/policy-rc.d" "$R/tmp/sgx-ddk16-um_armel.deb" \
-    "$R/tmp/sgx-ddk16-tools_armel.deb" "$R/tmp/sgx-ddk16-dev_armel.deb"
+rm -f "$R/usr/sbin/policy-rc.d" "$R/tmp/sgx-ddk14-um_armel.deb" \
+    "$R/tmp/sgx-ddk14-tools_armel.deb" "$R/tmp/sgx-ddk14-dev_armel.deb"
 
-# One-command build wrapper for DDK 1.6 EGL/GLES2 programs.
+# One-command build wrapper for DDK 1.4 EGL/GLES2 programs.
 cat > "$R/usr/local/bin/sgx-cc" <<'CC'
 #!/bin/sh
-# Compile a soft-float armel program against the DDK 1.6 EGL/GLES2 libraries.
+# Compile a soft-float armel program against the DDK 1.4 EGL/GLES2 libraries.
 export PKG_CONFIG_PATH=/usr/lib/arm-linux-gnueabi/pkgconfig
 exec arm-linux-gnueabi-gcc "$@" \
     $(pkg-config --cflags glesv2 egl) \
     $(pkg-config --libs glesv2 egl) \
-    -Wl,-rpath,/opt/sgx-ddk16/lib -Wl,-rpath-link,/opt/sgx-ddk16/lib
+    -Wl,-rpath,/opt/sgx-ddk14/lib -Wl,-rpath-link,/opt/sgx-ddk14/lib
 CC
 chmod 755 "$R/usr/local/bin/sgx-cc"
 
-# Hard-float (armhf) ABI shim: lets prebuilt hard-float GLES/EGL binaries drive
-# the soft-float DDK. Optional — installed only when SGX_DDK16_HF_DIR points at a
-# built shim tree (sgx-ddk16/build/hf-shim from `make hf-shim`).
-if [ -n "$ddk16_hf_dir" ]; then
-    echo "=== install hard-float ABI shim ==="
-    [ -f "$ddk16_hf_dir/lib/libEGL.so" ] && [ -d "$ddk16_hf_dir/ddk" ] || {
-        echo "SGX_DDK16_HF_DIR=$ddk16_hf_dir does not contain a built shim (lib/ + ddk/)" >&2
-        exit 1
-    }
-    install -d "$R/opt/sgx-ddk16-hf/lib" "$R/opt/sgx-ddk16-hf/ddk"
-    cp -a "$ddk16_hf_dir/lib/." "$R/opt/sgx-ddk16-hf/lib/"
-    cp -a "$ddk16_hf_dir/ddk/." "$R/opt/sgx-ddk16-hf/ddk/"
-    # The shim's loader finds the real (patched, libSGXm-first) DDK by absolute
-    # path; the app only needs the shim sonames on its library path.
-    cat > "$R/usr/bin/sgx-ddk16-hf-run" <<'HF'
+# Hard-float (armhf) ABI shim: lets hard-float GLES/EGL binaries (Slint apps)
+# drive the soft-float DDK.
+echo "=== install hard-float ABI shim ==="
+install -d "$R/opt/sgx-ddk14-hf/lib" "$R/opt/sgx-ddk14-hf/ddk"
+cp -a "$ddk_hf_dir/lib/." "$R/opt/sgx-ddk14-hf/lib/"
+cp -a "$ddk_hf_dir/ddk/." "$R/opt/sgx-ddk14-hf/ddk/"
+# The shim's loader finds the real (patched, libSGXm-first) DDK by absolute
+# path; the app only needs the shim sonames on its library path.
+cat > "$R/usr/bin/sgx-ddk14-hf-run" <<'HF'
 #!/bin/sh
-# Run a hard-float (armhf) GLES/EGL program on the soft-float SGX DDK 1.6 via the
+# Run a hard-float (armhf) GLES/EGL program on the soft-float SGX DDK 1.4 via the
 # ABI shim: hard-float libEGL/libGLESv2 veneers forward into an isolated dlmopen
 # namespace holding the real soft-float DDK + the libSGXm float interposer.
-[ "$#" -gt 0 ] || { echo 'usage: sgx-ddk16-hf-run PROGRAM [ARG ...]' >&2; exit 2; }
-export LD_LIBRARY_PATH=/opt/sgx-ddk16-hf/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
-export SGXHF_DDK_DIR=/opt/sgx-ddk16-hf/ddk
+# libsgxvao.so supplies GL_OES_vertex_array_object (missing in 1.4) and makes
+# glDetachShader a no-op (DDK 1.4 bug); SGXVAO_REAL_DETACH=1 restores the call.
+[ "$#" -gt 0 ] || { echo 'usage: sgx-ddk14-hf-run PROGRAM [ARG ...]' >&2; exit 2; }
+export LD_LIBRARY_PATH=/opt/sgx-ddk14-hf/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
+export LD_PRELOAD=/opt/sgx-ddk14-hf/lib/libsgxvao.so${LD_PRELOAD:+:$LD_PRELOAD}
+export SGXHF_DDK_DIR=/opt/sgx-ddk14-hf/ddk
 exec "$@"
 HF
-    chmod 755 "$R/usr/bin/sgx-ddk16-hf-run"
-fi
+chmod 755 "$R/usr/bin/sgx-ddk14-hf-run"
 
-echo "=== VERIFY: matched DDK 1.6 soft-float runtime ==="
+echo "=== VERIFY: matched DDK 1.4 soft-float runtime ==="
 chroot "$R" dpkg --print-foreign-architectures | grep -qx armel
-for package in sgx-ddk16-um:armel sgx-ddk16-tools:armel \
+for package in sgx-ddk14-um:armel sgx-ddk14-tools:armel \
     libc6:armel libgcc-s1:armel libstdc++6:armel; do
     [ "$(chroot "$R" dpkg-query -W -f='${Status}' "$package")" = "install ok installed" ] || {
         echo "required package is not fully installed: $package" >&2
@@ -201,13 +205,13 @@ for package in sgx-ddk16-um:armel sgx-ddk16-tools:armel \
     }
 done
 chroot "$R" dpkg-query -W -f='${binary:Package} ${Architecture} ${Version} ${db:Status-Abbrev}\n' \
-    sgx-ddk16-um:armel sgx-ddk16-tools:armel \
+    sgx-ddk14-um:armel sgx-ddk14-tools:armel \
     libc6:armel libgcc-s1:armel libstdc++6:armel
-[ -f "$R/opt/sgx-ddk16/lib/libEGL.so" ]
-[ -f "$R/opt/sgx-ddk16/lib/libGLESv2.so" ]
-[ -f "$R/opt/sgx-ddk16/lib/libpvrPVR2D_FLIPWSEGL.so" ]
-[ -x "$R/usr/bin/sgx-ddk16-run" ]
-[ "$(readlink "$R/usr/bin/pvrsrvinit")" = sgx-ddk16-run ]
+[ -f "$R/opt/sgx-ddk14/lib/libEGL.so" ]
+[ -f "$R/opt/sgx-ddk14/lib/libGLESv2.so" ]
+[ -f "$R/opt/sgx-ddk14/lib/libpvrPVR2D_FLIPWSEGL.so" ]
+[ -x "$R/usr/bin/sgx-ddk14-run" ]
+[ "$(readlink "$R/usr/bin/pvrsrvinit")" = sgx-ddk14-run ]
 [ -x "$R/etc/init.d/powervr" ]
 powervr_enabled=false
 for link in "$R"/etc/rc[2345].d/S*powervr; do
@@ -218,21 +222,21 @@ for link in "$R"/etc/rc[2345].d/S*powervr; do
 done
 [ "$powervr_enabled" = true ] || { echo "powervr SysV service is not enabled" >&2; exit 1; }
 grep -Fxq 'WindowSystem=libpvrPVR2D_FLIPWSEGL.so' "$R/etc/powervr.ini"
-grep -Fxq 'options dcnohw present=2' "$R/etc/modprobe.d/sgx-ddk16.conf"
+grep -Fxq 'options dcnohw present=2' "$R/etc/modprobe.d/sgx-ddk14.conf"
 if chroot "$R" dpkg-query -W -f='${db:Status-Abbrev}\n' \
-    sgx-ddk-um-ti343x sgx-ddk-um-tools 2>/dev/null | grep -q '^ii'; then
-    echo "mismatched Maemo SGX userspace is still installed" >&2
+    sgx-ddk-um-ti343x sgx-ddk-um-tools sgx-ddk16-um sgx-ddk16-tools 2>/dev/null | grep -q '^ii'; then
+    echo "mismatched SGX userspace is still installed" >&2
     exit 1
 fi
 
 echo "=== VERIFY: on-board armel build toolchain + DDK dev headers ==="
-[ "$(chroot "$R" dpkg-query -W -f='${Status}' sgx-ddk16-dev:armel)" = "install ok installed" ] || {
-    echo "sgx-ddk16-dev is not installed" >&2; exit 1; }
+[ "$(chroot "$R" dpkg-query -W -f='${Status}' sgx-ddk14-dev:armel)" = "install ok installed" ] || {
+    echo "sgx-ddk14-dev is not installed" >&2; exit 1; }
 [ -x "$R/usr/bin/arm-linux-gnueabi-gcc-12" ] || { echo "armel gcc-12 missing" >&2; exit 1; }
 chroot "$R" sh -c 'command -v arm-linux-gnueabi-gcc >/dev/null' || { echo "arm-linux-gnueabi-gcc missing" >&2; exit 1; }
 [ -x "$R/usr/local/bin/sgx-cc" ] || { echo "sgx-cc wrapper missing" >&2; exit 1; }
-[ -f "$R/usr/include/sgx-ddk16/GLES2/gl2.h" ] || { echo "GLES2 headers missing" >&2; exit 1; }
-[ -f "$R/usr/include/sgx-ddk16/EGL/egl.h" ] || { echo "EGL headers missing" >&2; exit 1; }
+[ -f "$R/usr/include/sgx-ddk14/GLES2/gl2.h" ] || { echo "GLES2 headers missing" >&2; exit 1; }
+[ -f "$R/usr/include/sgx-ddk14/EGL/egl.h" ] || { echo "EGL headers missing" >&2; exit 1; }
 [ -f "$R/usr/lib/arm-linux-gnueabi/pkgconfig/glesv2.pc" ] || { echo "glesv2.pc missing" >&2; exit 1; }
 printf '#include <EGL/egl.h>\nint main(void){ return eglGetError() != EGL_SUCCESS; }\n' > "$R/tmp/egl-smoke.c"
 chroot "$R" sh -c 'cd /tmp && sgx-cc egl-smoke.c -o egl-smoke' || {
@@ -253,16 +257,19 @@ done
 [ "$syslog_enabled" = true ] || { echo "busybox-syslogd service is not enabled" >&2; exit 1; }
 grep -Fq '/var/log/messages' "$R/etc/default/busybox-syslogd" || { echo "syslog log target not configured" >&2; exit 1; }
 
-if [ -n "$ddk16_hf_dir" ]; then
-    echo "=== VERIFY: hard-float ABI shim ==="
-    [ -f "$R/opt/sgx-ddk16-hf/lib/libEGL.so" ] || { echo "hf shim libEGL.so missing" >&2; exit 1; }
-    [ -f "$R/opt/sgx-ddk16-hf/lib/libGLESv2.so" ] || { echo "hf shim libGLESv2.so missing" >&2; exit 1; }
-    [ -f "$R/opt/sgx-ddk16-hf/lib/libsgxhf.so.1" ] || { echo "hf shim libsgxhf missing" >&2; exit 1; }
-    [ -f "$R/opt/sgx-ddk16-hf/ddk/libEGL.so" ] || { echo "hf shim patched DDK missing" >&2; exit 1; }
-    [ -x "$R/usr/bin/sgx-ddk16-hf-run" ] || { echo "sgx-ddk16-hf-run wrapper missing" >&2; exit 1; }
-    readelf -A "$R/opt/sgx-ddk16-hf/lib/libGLESv2.so" | grep -qi 'VFP_args' || {
-        echo "hf shim libGLESv2.so is not hard-float" >&2; exit 1; }
-fi
+echo "=== VERIFY: hard-float ABI shim + Slint runtime ==="
+[ -f "$R/opt/sgx-ddk14-hf/lib/libEGL.so" ] || { echo "hf shim libEGL.so missing" >&2; exit 1; }
+[ -f "$R/opt/sgx-ddk14-hf/lib/libGLESv2.so" ] || { echo "hf shim libGLESv2.so missing" >&2; exit 1; }
+[ -f "$R/opt/sgx-ddk14-hf/lib/libsgxhf.so.1" ] || { echo "hf shim libsgxhf missing" >&2; exit 1; }
+[ -f "$R/opt/sgx-ddk14-hf/lib/libsgxvao.so" ] || { echo "libsgxvao.so missing" >&2; exit 1; }
+[ -f "$R/opt/sgx-ddk14-hf/ddk/libEGL.so" ] || { echo "hf shim patched DDK missing" >&2; exit 1; }
+[ -x "$R/usr/bin/sgx-ddk14-hf-run" ] || { echo "sgx-ddk14-hf-run wrapper missing" >&2; exit 1; }
+for so in libGLESv2.so libsgxvao.so; do
+    readelf -A "$R/opt/sgx-ddk14-hf/lib/$so" | grep -qi 'VFP_args' || {
+        echo "hf shim $so is not hard-float" >&2; exit 1; }
+done
+chroot "$R" dpkg-query -W -f='${Status}' libfontconfig1:armhf | grep -q 'install ok installed' || {
+    echo "libfontconfig1 (Slint runtime) missing" >&2; exit 1; }
 
 chroot "$R" update-rc.d chrony defaults
 cat > "$R/etc/init.d/beagle-memory" <<'SYSV'
@@ -385,10 +392,10 @@ mkdir -p "$nvg_dst/nanovg"
 cp "$nvg_work"/src/nanovg.c "$nvg_work"/src/*.h "$nvg_dst/nanovg/"
 cp "$here/../tools/nanovg-demo.c" "$nvg_dst/"
 cat > "$nvg_dst/Makefile" <<'MK'
-# Build the NanoVG demo soft-float armel against the DDK 1.6 EGL/GLES2 libraries.
+# Build the NanoVG demo soft-float armel against the DDK 1.4 EGL/GLES2 libraries.
 CC = arm-linux-gnueabi-gcc
-CFLAGS = -O2 -Inanovg -I/usr/include/sgx-ddk16
-LDFLAGS = -L/opt/sgx-ddk16/lib -Wl,-rpath,/opt/sgx-ddk16/lib -Wl,-rpath-link,/opt/sgx-ddk16/lib
+CFLAGS = -O2 -Inanovg -I/usr/include/sgx-ddk14
+LDFLAGS = -L/opt/sgx-ddk14/lib -Wl,-rpath,/opt/sgx-ddk14/lib -Wl,-rpath-link,/opt/sgx-ddk14/lib
 LDLIBS = -lEGL -lGLESv2 -lm
 
 nanovg-demo: nanovg-demo.c nanovg/nanovg.c
@@ -401,13 +408,13 @@ MK
 echo "=== GRAFT: gpu-test helper ==="
 cat > "$R/root/gpu-test.sh" <<'GPU'
 #!/bin/sh
-# Read-only first-boot check for the matched DDK 1.6 stack. The powervr boot
+# Read-only first-boot check for the matched DDK 1.4 stack. The powervr boot
 # service owns pvrsrvinit; do not run it a second time against initialized services.
 set -eu
 
 echo "== packages =="
 dpkg-query -W -f='${binary:Package} ${Architecture} ${Version} ${db:Status-Abbrev}\n' \
-    sgx-ddk16-um:armel sgx-ddk16-tools:armel \
+    sgx-ddk14-um:armel sgx-ddk14-tools:armel \
     libc6:armel libgcc-s1:armel libstdc++6:armel
 
 echo "== modules =="
@@ -415,14 +422,14 @@ lsmod | grep -E '^(pvrsrvkm|dcnohw)'
 printf 'dcnohw present='; cat /sys/module/dcnohw/parameters/present
 
 echo "== TI Services test =="
-log=/tmp/sgx-ddk16-services-test.log
-if timeout 30 sgx-ddk16-run services_test >"$log" 2>&1; then
+log=/tmp/sgx-ddk14-services-test.log
+if timeout 30 sgx-ddk14-run services_test >"$log" 2>&1; then
     grep -E 'DDK version|End loop' "$log"
-    echo "SGX DDK 1.6 services: PASS"
+    echo "SGX DDK 1.4 services: PASS"
 else
     status=$?
     tail -40 "$log"
-    echo "SGX DDK 1.6 services: FAIL (status $status)" >&2
+    echo "SGX DDK 1.4 services: FAIL (status $status)" >&2
     exit "$status"
 fi
 GPU

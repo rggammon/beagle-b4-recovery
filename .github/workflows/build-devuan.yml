@@ -7,14 +7,14 @@ on:
   workflow_dispatch:
     inputs:
       sdk_url:
-        description: HTTPS URL for Graphics_SDK_setuplinux_4_03_00_02.bin
+        description: HTTPS URL for Graphics_SDK_setuplinux_4_00_00_01.bin (DDK 1.4.14.2616)
         required: true
-        default: https://software-dl.ti.com/dsps/dsps_public_sw/sdo_sb/targetcontent/gfxsdk/4_03_00_02/exports/Graphics_SDK_setuplinux_4_03_00_02.bin
+        default: https://software-dl.ti.com/dsps/dsps_public_sw/sdo_sb/targetcontent/gfxsdk/4_00_00_01/exports/Graphics_SDK_setuplinux_4_00_00_01.bin
         type: string
       sdk_sha256:
         description: Verified SHA-256 of the TI installer
         required: true
-        default: "cdb0bd3964e107733d632aa8224e0537b05c1ffac34befc036423458c8d75255"
+        default: "62383d15e33adf9349afba063b0f2405a15aa6c4b0b5579b0abdf81db7580df7"
         type: string
       accept_ti_eula:
         description: I accept the TI EULA and authorize embedding its binaries in the image artifact
@@ -44,16 +44,16 @@ jobs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           sudo update-binfmts --enable qemu-arm || true
 
-      - name: Build matched DDK 1.6 userspace packages
-        working-directory: sgx-ddk16
+      - name: Build matched DDK 1.4 userspace packages
+        working-directory: sgx-ddk14
         env:
           SDK_URL: ${{ inputs.sdk_url }}
           SDK_SHA256: ${{ inputs.sdk_sha256 }}
           ACCEPT_TI_EULA: "yes"
         run: make package
 
-      - name: Build hard-float ABI shim
-        working-directory: sgx-ddk16
+      - name: Build hard-float ABI shim + libsgxvao
+        working-directory: sgx-ddk14
         env:
           SDK_URL: ${{ inputs.sdk_url }}
           SDK_SHA256: ${{ inputs.sdk_sha256 }}
@@ -69,8 +69,8 @@ jobs:
 
       - name: Build Devuan + SGX530 rootfs (ext4)
         env:
-          SGX_DDK16_DEB_DIR: ${{ github.workspace }}/sgx-ddk16/dist
-          SGX_DDK16_HF_DIR: ${{ github.workspace }}/sgx-ddk16/build/hf-shim
+          SGX_DDK14_DEB_DIR: ${{ github.workspace }}/sgx-ddk14/dist
+          SGX_DDK14_HF_DIR: ${{ github.workspace }}/sgx-ddk14/build/hf-shim
         run: sudo -E ./rootfs/build-devuan.sh
 
       - name: Assemble Devuan SD-card image

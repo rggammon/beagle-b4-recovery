@@ -143,7 +143,7 @@ SGX fixes needed by each image.
 
 `kernel/build-devuan.sh` applies these board patches to the fork's integration branch
 (`rggammon/linux_openpvrsgx`, `users/rgammon/b4-7.2`, pinned by commit) and builds the
-DDK selected by `config-devuan` + `dc_nohw`. The AB4 timer correction is still supplied
+DDK selected by `config-devuan` (DDK 1.4.14.2616) + `dc_nohw`. The AB4 timer correction is still supplied
 by building `omap3-beagle-ab4.dtb`; it is not an additional patch.
 
 All SGX/DDK fixes are commits on the fork's topic branches, which `b4-7.2` merges:

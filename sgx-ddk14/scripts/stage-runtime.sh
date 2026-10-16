@@ -21,7 +21,7 @@ runtime_lib="$RUNTIME_DESTDIR$prefix/lib"
 tools_bin="$TOOLS_DESTDIR$prefix/bin"
 
 rm -rf "$RUNTIME_DESTDIR" "$TOOLS_DESTDIR"
-mkdir -p "$runtime_lib" "$TOOLS_DESTDIR/usr/bin" "$tools_bin"
+mkdir -p "$runtime_lib" "$RUNTIME_DESTDIR/etc/modprobe.d" "$TOOLS_DESTDIR/usr/bin" "$tools_bin"
 
 # The DDK 1.4 (Graphics SDK 4.00.00.01) gfx_rel_es2.x library set differs
 # slightly from 1.6 (adds X11 WSEGL, drops libusc). Require the GL core and
@@ -80,8 +80,9 @@ cat > "$RUNTIME_DESTDIR/etc/powervr.ini" <<'EOF'
 WindowSystem=libpvrPVR2D_FLIPWSEGL.so
 EOF
 
-# The 1.4 dc_nohw display class is a plain buffer provider; the paced present=2
-# integration is 1.6-only, so no dcnohw modprobe options are shipped here yet.
+cat > "$RUNTIME_DESTDIR/etc/modprobe.d/sgx-ddk14.conf" <<'EOF'
+options dcnohw present=2
+EOF
 
 cat > "$TOOLS_DESTDIR/usr/bin/sgx-ddk14-run" <<'EOF'
 #!/bin/sh

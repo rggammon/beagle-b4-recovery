@@ -26,10 +26,14 @@ ACCEPT_TI_EULA ?= no
 INSTALLER := $(BUILD_DIR)/downloads/$(INSTALLER_NAME)
 SDK_ROOT := $(BUILD_DIR)/sdk
 AUDIT_DIR := $(BUILD_DIR)/audit
+HF_SHIM_DIR := $(BUILD_DIR)/hf-shim
+TOOLS_DIR := $(CURDIR)/../tools
+CROSS_HF ?= arm-linux-gnueabihf-gcc
+PATCHELF ?= patchelf
 
 .DEFAULT_GOAL := help
 
-.PHONY: help fetch unpack audit dev-tree package verify clean
+.PHONY: help fetch unpack audit dev-tree hf-shim package verify clean
 
 help:
 	@printf '%s\n' \
@@ -39,6 +43,7 @@ help:
 		'  make unpack   Extract gfx_rel_es2.x after explicit EULA acceptance' \
 		'  make audit    Record ELF attributes, dependencies, imports, and exports' \
 		'  make dev-tree Stage public TI headers and pkg-config metadata' \
+		'  make hf-shim  Build the hard-float ABI shim + libsgxvao (needs armhf cross gcc)' \
 		'  make package  Build the runtime, tools, and development packages' \
 		'  make verify   Inspect package contents and run static ELF checks' \
 		'' \
@@ -66,6 +71,20 @@ audit: unpack
 dev-tree: unpack
 	@SDK_ROOT="$(SDK_ROOT)" DESTDIR="$(BUILD_DIR)/dev-tree" \
 		sh ./scripts/stage-dev.sh
+
+# The SDK 4.00.00.01 libs keep their DWARF, so the veneers are generated from
+# 1.4 itself (byte-identical to the 1.6-generated ones). libsgxvao.so works
+# around DDK 1.4 GL gaps/bugs for femtovg (see tools/gles-oes-vao-stub.c).
+hf-shim: unpack dev-tree
+	@runtime=$$(cat "$(SDK_ROOT)/runtime.path"); \
+		DDK_LIB="$$runtime" \
+		DDK_INC="$(BUILD_DIR)/dev-tree/usr/include/sgx-ddk14" \
+		OUT="$(HF_SHIM_DIR)" \
+		CROSS_HF="$(CROSS_HF)" PATCHELF="$(PATCHELF)" \
+		GEN="$(TOOLS_DIR)/gen-hf-shim.py" \
+		sh "$(TOOLS_DIR)/build-hf-shim.sh"
+	@$(CROSS_HF) -O2 -shared -fPIC "$(TOOLS_DIR)/gles-oes-vao-stub.c" -ldl \
+		-o "$(HF_SHIM_DIR)/lib/libsgxvao.so"
 
 package: audit
 	@sed -i '1s/(1\.4\.14\.[0-9][0-9]*)/($(DDK_VERSION))/' debian/changelog

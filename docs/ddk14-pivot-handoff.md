@@ -375,6 +375,21 @@ Re-run the Stage 0 lifecycle/soak on 1.4 after each kernel-side change, and the
 
 ## Shipping a 1.4 image + hard-float shim (findings 2026-09-25)
 
+> **Done 2026-10-15:** the Devuan image now builds DDK 1.4 only. `config-devuan`
+> selects `CONFIG_PVRSGX_1_4_14_2616=y` + `_DC_NOHW=y` (the 1.4 `dc_nohw` option
+> is a bool; it still builds a separate `dcnohw.ko`). `rootfs/build-devuan.sh`
+> installs the `sgx-ddk14-*` debs (with `options dcnohw present=2`) and the
+> `sgx-ddk14/Makefile hf-shim` output to `/opt/sgx-ddk14-hf`;
+> `sgx-ddk14-hf-run` preloads `libsgxvao.so`. The TI SDK 4.00.00.01 libs are
+> code-identical to the SuperZaxxon/Pandora libs and are **not** stripped, so
+> the shim veneers are generated from 1.4's own DWARF (identical to the 1.6
+> veneers). Slint runtime deps (`libfontconfig1`, `fonts-dejavu-core`) are in
+> the image; apps, the screensaver and debug tools are not. 1.6 is dropped from
+> the image. Pre-flight on the flashed `c38943a` kernel: the in-tree 1.4 modules
+> load (modversions match), `pvrsrvinit` + `services_test` + `gles2test1` from
+> the new debs pass, and femtovg-probe `FVG_MODE=layer` through the new shim is
+> 9/9 (0/9 with `SGXVAO_REAL_DETACH=1`), dmesg clean. The notes below are the
+> original plan.
 The Devuan image is **inherently 1.6** at three layers, so today's 1.4 work is a
 live-board hand-swap (reboot = back to 1.6 control). Baking a 1.4 image (Stage 8)
 means:
